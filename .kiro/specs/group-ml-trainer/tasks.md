@@ -41,7 +41,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 1.1, 3.1_
 
 - [ ] 2. Database client and storage integration
-  - [ ] 2.1 Implement `coordinator/db.py` — Supabase client initialization and query helpers
+  - [x] 2.1 Implement `coordinator/db.py` — Supabase client initialization and query helpers
     - Initialize Supabase client from environment variables
     - Create helper functions for common queries: insert, select, update with filters
     - Wrap Supabase errors into consistent application exceptions
