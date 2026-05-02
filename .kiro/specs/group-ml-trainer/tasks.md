@@ -23,7 +23,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Install SWR for data fetching
     - _Requirements: 9.1, 10.1_
 
-  - [ ] 1.4 Create shared constants and enums
+  - [x] 1.4 Create shared constants and enums
     - Create `coordinator/constants.py` with enums/constants for:
       - Node statuses: `idle`, `busy`, `offline`
       - Job statuses: `queued`, `running`, `completed`, `failed`
@@ -41,7 +41,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 1.1, 3.1_
 
 - [ ] 2. Database client and storage integration
-  - [ ] 2.1 Implement `coordinator/db.py` — Supabase client initialization and query helpers
+  - [x] 2.1 Implement `coordinator/db.py` — Supabase client initialization and query helpers
     - Initialize Supabase client from environment variables
     - Create helper functions for common queries: insert, select, update with filters
     - Wrap Supabase errors into consistent application exceptions
@@ -54,7 +54,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 7.1, 7.2_
 
 - [ ] 3. Pydantic models for API layer
-  - [ ] 3.1 Implement `coordinator/models.py` — Request and response models
+  - [x] 3.1 Implement `coordinator/models.py` — Request and response models
     - Define `NodeRegistrationRequest`, `NodeRegistrationResponse`
     - Define `JobSubmissionRequest`, `JobSubmissionResponse`
     - Define `MetricsReportRequest`, `TaskCompleteRequest`, `TaskFailRequest`
