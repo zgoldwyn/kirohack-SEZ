@@ -305,12 +305,12 @@ This plan implements a distributed ML task orchestration platform with three com
     - CIFAR-10 is stretch goal, not required for MVP
     - _Requirements: 3.5, 5.1_
 
-  - [ ] 18.6 Implement `worker/models.py` — MLP model definition
+  - [x] 18.6 Implement `worker/models.py` — MLP model definition
     - Configurable MLP: input size (derived from dataset), hidden layers list, output size, activation function
     - Support relu activation (default)
     - _Requirements: 3.6, 5.1_
 
-  - [ ] 18.7 Implement `worker/trainer.py` — PyTorch training loop
+  - [x] 18.7 Implement `worker/trainer.py` — PyTorch training loop
     - Load dataset shard using `datasets.py`
     - Instantiate model using `models.py`
     - Train for configured epochs with configured hyperparameters (learning_rate, batch_size)
