@@ -125,7 +125,7 @@ class HeartbeatMonitor:
                 filters={"id": node_db_id},
             )
             logger.info(
-                "Node %s (%s) marked offline — last heartbeat: %s",
+                "event=node_offline | node_id=%s | node_db_id=%s | last_heartbeat=%s",
                 node.get("node_id"),
                 node_db_id,
                 node.get("last_heartbeat"),
@@ -163,7 +163,7 @@ class HeartbeatMonitor:
                     filters={"id": task["id"]},
                 )
                 logger.info(
-                    "Task %s (job %s) marked failed — node %s went offline",
+                    "event=task_failed_node_offline | task_id=%s | job_id=%s | node_db_id=%s",
                     task["id"],
                     task.get("job_id"),
                     node_db_id,

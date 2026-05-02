@@ -590,7 +590,7 @@ Integration tests verify end-to-end flows against a test Supabase instance:
 5. **Task interruption lifecycle**: Register node → assign task → start task → stop heartbeat → node marked offline → task marked failed with 'node went offline' error → job failure semantics verified (if applicable).
 
 ### Test Configuration
-
+USE THE VIRTUAL ENVIRONMENT
 ```python
 # conftest.py — Hypothesis settings
 from hypothesis import settings

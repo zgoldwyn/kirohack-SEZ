@@ -1,10 +1,16 @@
-"""Supabase Storage helpers for checkpoint upload URL generation."""
+"""Supabase Storage helpers for checkpoint upload URL generation.
+
+Uses httpx to call the Supabase Storage API directly.
+"""
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from coordinator.db import DatabaseError, get_client
+import httpx
+
+from coordinator.db import DatabaseError
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -31,55 +37,55 @@ def generate_signed_upload_url(job_id: str, task_id: str) -> dict[str, Any]:
     """Generate a signed upload URL for a task checkpoint.
 
     The URL follows the path convention ``{job_id}/{task_id}/final.pt`` inside
-    the ``checkpoints`` bucket.  Signed upload URLs are valid for 2 hours
-    (Supabase default) and allow the holder to upload a file without further
-    authentication.
-
-    Workers use these URLs to upload checkpoint files directly to Supabase
-    Storage — they never hold privileged Supabase credentials.
+    the ``checkpoints`` bucket.
 
     Returns:
-        A dict with ``signed_url`` (the upload URL) and ``path`` (the storage
-        path) keys.  The ``token`` field from Supabase is included as well so
-        callers can use ``upload_to_signed_url`` if needed.
+        A dict with ``signed_url`` and ``path`` keys.
 
     Raises:
         StorageError: if the signed URL could not be created.
     """
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+
+    if not supabase_url or not key:
+        raise StorageError(
+            "SUPABASE_URL and SUPABASE_KEY must be set for storage operations"
+        )
+
     storage_path = f"{job_id}/{task_id}/final.pt"
+    api_url = f"{supabase_url}/storage/v1/object/upload/sign/{CHECKPOINTS_BUCKET}/{storage_path}"
 
     try:
-        response = (
-            get_client()
-            .storage
-            .from_(CHECKPOINTS_BUCKET)
-            .create_signed_upload_url(storage_path)
+        resp = httpx.post(
+            api_url,
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+            },
+            timeout=10.0,
         )
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as exc:
         raise StorageError(
-            f"Failed to create signed upload URL for '{storage_path}'",
-            detail=str(exc),
+            f"Failed to create signed upload URL for '{storage_path}': {exc}"
         ) from exc
 
-    # The response is a dict with 'signed_url' and 'token' (among others).
-    if not response or "signed_url" not in (response if isinstance(response, dict) else {}):
-        # Depending on the supabase-py version the shape may vary; handle
-        # both dict and object-with-attributes.
-        signed_url = getattr(response, "signed_url", None)
-        token = getattr(response, "token", None)
-        if signed_url is None:
-            raise StorageError(
-                f"Unexpected response when creating signed upload URL for '{storage_path}'",
-                detail=str(response),
-            )
-        return {
-            "signed_url": signed_url,
-            "token": token,
-            "path": storage_path,
-        }
+    signed_url = data.get("url") or data.get("signedURL") or data.get("signed_url")
+    if not signed_url:
+        raise StorageError(
+            f"Unexpected response when creating signed upload URL: {data}"
+        )
+
+    # The Supabase Storage API returns a relative path like
+    # /object/upload/sign/bucket/path?token=...
+    # We need to prepend the full storage API base URL
+    if signed_url.startswith("/"):
+        signed_url = f"{supabase_url}/storage/v1{signed_url}"
 
     return {
-        "signed_url": response["signed_url"],
-        "token": response.get("token"),
+        "signed_url": signed_url,
+        "token": data.get("token"),
         "path": storage_path,
     }
