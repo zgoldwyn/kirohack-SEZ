@@ -43,3 +43,17 @@ SUPPORTED_DATASETS = {"MNIST", "Fashion-MNIST", "synthetic"}
 
 # Supported model types
 SUPPORTED_MODEL_TYPES = {"MLP"}
+
+
+class SupportedDataset(str, Enum):
+    """Datasets supported in the core MVP."""
+
+    MNIST = "MNIST"
+    FASHION_MNIST = "Fashion-MNIST"
+    SYNTHETIC = "synthetic"
+
+
+class SupportedModelType(str, Enum):
+    """Model types supported in the core MVP."""
+
+    MLP = "MLP"

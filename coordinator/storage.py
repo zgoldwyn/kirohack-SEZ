@@ -27,7 +27,7 @@ class StorageError(DatabaseError):
 # ---------------------------------------------------------------------------
 
 
-def create_signed_upload_url(job_id: str, task_id: str) -> dict[str, Any]:
+def generate_signed_upload_url(job_id: str, task_id: str) -> dict[str, Any]:
     """Generate a signed upload URL for a task checkpoint.
 
     The URL follows the path convention ``{job_id}/{task_id}/final.pt`` inside

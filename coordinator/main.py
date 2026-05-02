@@ -1,7 +1,9 @@
 """Group ML Trainer — Coordinator (FastAPI entry point)."""
 
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -9,9 +11,20 @@ from fastapi import Depends, FastAPI, HTTPException, status
 
 from coordinator import db
 from coordinator.aggregator import aggregate_job_metrics, check_job_failure
-from coordinator.auth import get_current_node
-from coordinator.constants import ArtifactType, NodeStatus, TaskStatus
-from coordinator.models import MetricsReportRequest, TaskCompleteRequest, TaskFailRequest
+from coordinator.auth import generate_token, get_current_node, hash_token
+from coordinator.constants import ArtifactType, JobStatus, NodeStatus, TaskStatus
+from coordinator.config_parser import ConfigValidationError, parse_job_config
+from coordinator.models import (
+    JobSubmissionRequest,
+    JobSubmissionResponse,
+    MetricsReportRequest,
+    NodeRegistrationRequest,
+    NodeRegistrationResponse,
+    TaskCompleteRequest,
+    TaskFailRequest,
+)
+from coordinator.heartbeat import heartbeat_monitor
+from coordinator.scheduler import create_tasks_for_job
 from coordinator.storage import generate_signed_upload_url
 
 from coordinator.dashboard import router as dashboard_router
@@ -28,10 +41,26 @@ if not SUPABASE_URL:
 if not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_SERVICE_KEY environment variable is not set")
 
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Start background tasks on startup, clean up on shutdown."""
+    monitor_task = heartbeat_monitor.start()
+    yield
+    heartbeat_monitor.stop()
+    if monitor_task and not monitor_task.done():
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+
 app = FastAPI(
     title="Group ML Trainer — Coordinator",
     description="Distributed ML task orchestration platform coordinator service.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Dashboard read endpoints (unauthenticated, local/demo only)
@@ -42,6 +71,172 @@ app.include_router(dashboard_router)
 async def health_check():
     """Basic health check endpoint."""
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# 7.1  POST /api/nodes/register
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/nodes/register", response_model=NodeRegistrationResponse)
+async def register_node(body: NodeRegistrationRequest):
+    """Register a new Worker node with the Coordinator.
+
+    - Validate request body (handled by Pydantic model)
+    - Check for duplicate node_id — return 409 if already registered
+    - Generate auth token, hash it, store node record with status "idle"
+    - Return node_db_id (database UUID) and the plaintext auth_token
+    """
+    # Check for duplicate node_id
+    existing = db.select("nodes", columns="id", filters={"node_id": body.node_id})
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"node_id '{body.node_id}' is already registered",
+        )
+
+    # Generate and hash auth token
+    token = generate_token()
+    token_hash = hash_token(token)
+
+    # Build the node record
+    node_data = {
+        "node_id": body.node_id,
+        "hostname": body.hostname,
+        "cpu_cores": body.cpu_cores,
+        "gpu_model": body.gpu_model,
+        "vram_mb": body.vram_mb,
+        "ram_mb": body.ram_mb,
+        "disk_mb": body.disk_mb,
+        "os": body.os,
+        "python_version": body.python_version,
+        "pytorch_version": body.pytorch_version,
+        "status": NodeStatus.IDLE.value,
+        "auth_token_hash": token_hash,
+    }
+
+    try:
+        record = db.insert("nodes", node_data)
+    except db.DatabaseError as exc:
+        logger.error("Failed to register node '%s': %s", body.node_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    return NodeRegistrationResponse(
+        node_db_id=record["id"],
+        auth_token=token,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8.1  POST /api/nodes/heartbeat
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/nodes/heartbeat")
+async def node_heartbeat(node: dict = Depends(get_current_node)):
+    """Update heartbeat timestamp for the authenticated node.
+
+    - Authenticate request using auth dependency
+    - Update last_heartbeat timestamp
+    - If node was "offline", set status back to "idle"
+    Requirements: 2.1, 2.3
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    update_data: dict = {"last_heartbeat": now}
+
+    if node.get("status") == NodeStatus.OFFLINE.value:
+        update_data["status"] = NodeStatus.IDLE.value
+
+    try:
+        db.update("nodes", update_data, filters={"id": node["id"]})
+    except db.DatabaseError as exc:
+        logger.error("Failed to update heartbeat for node '%s': %s", node.get("node_id"), exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# 9.1  POST /api/jobs
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/jobs", response_model=JobSubmissionResponse)
+async def submit_job(body: JobSubmissionRequest):
+    """Submit a new ML training job.
+
+    - Validate request body (Pydantic handles required fields / types)
+    - Validate dataset_name and model_type via config_parser
+    - Count idle nodes; reject if shard_count > idle_node_count (HTTP 400)
+    - Create job record with status "queued"
+    - Trigger task creation via scheduler
+    - Return job_id
+    Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
+    """
+    # Validate dataset and model type, build structured config
+    try:
+        job_config = parse_job_config(body)
+    except ConfigValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors,
+        ) from exc
+
+    # Count idle nodes and reject if insufficient
+    idle_nodes = db.select(
+        "nodes",
+        columns="id",
+        filters={"status": NodeStatus.IDLE.value},
+    )
+    idle_count = len(idle_nodes)
+
+    if body.shard_count > idle_count:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"shard_count ({body.shard_count}) exceeds the number of "
+                f"idle nodes ({idle_count})"
+            ),
+        )
+
+    # Create job record
+    job_data = {
+        "job_name": body.job_name,
+        "dataset_name": body.dataset_name,
+        "model_type": body.model_type,
+        "hyperparameters": job_config.hyperparameters.model_dump(),
+        "shard_count": body.shard_count,
+        "status": JobStatus.QUEUED.value,
+    }
+
+    try:
+        job_record = db.insert("jobs", job_data)
+    except db.DatabaseError as exc:
+        logger.error("Failed to create job: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    job_id = job_record["id"]
+
+    # Create tasks via scheduler
+    try:
+        create_tasks_for_job(job_id, job_config)
+    except db.DatabaseError as exc:
+        logger.error("Failed to create tasks for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    return JobSubmissionResponse(job_id=job_id)
 
 
 # ---------------------------------------------------------------------------
