@@ -1,53 +1,49 @@
-"""Supabase client initialization and database query helpers."""
+"""Supabase client initialization and database query helpers.
+
+Provides a singleton Supabase client and thin helper functions for
+common database operations (insert, select, update with filters).
+Wraps Supabase errors into consistent application exceptions.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
-from dotenv import load_dotenv
 from supabase import Client, create_client
 
-load_dotenv()
-
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Custom exceptions
 # ---------------------------------------------------------------------------
 
-class DatabaseError(Exception):
-    """Base exception for database operations."""
 
-    def __init__(self, message: str, detail: Any = None) -> None:
-        super().__init__(message)
-        self.detail = detail
+class DatabaseError(Exception):
+    """Raised when a database operation fails."""
 
 
 class RecordNotFoundError(DatabaseError):
-    """Raised when a query returns no matching records."""
-
-
-class DuplicateRecordError(DatabaseError):
-    """Raised when an insert violates a uniqueness constraint."""
+    """Raised when an expected record is not found."""
 
 
 # ---------------------------------------------------------------------------
-# Client singleton
+# Singleton client
 # ---------------------------------------------------------------------------
 
 _client: Client | None = None
 
 
 def get_client() -> Client:
-    """Return the Supabase client, creating it on first call."""
+    """Return the singleton Supabase client, creating it on first call."""
     global _client
     if _client is None:
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_KEY")
         if not url or not key:
-            raise DatabaseError(
-                "Missing Supabase credentials",
-                detail="SUPABASE_URL and SUPABASE_SERVICE_KEY must be set",
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set"
             )
         _client = create_client(url, key)
     return _client
@@ -57,21 +53,21 @@ def get_client() -> Client:
 # Query helpers
 # ---------------------------------------------------------------------------
 
-def insert(table: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Insert a single row and return the created record.
 
-    Raises:
-        DuplicateRecordError: if a uniqueness constraint is violated.
-        DatabaseError: on any other Supabase/Postgres error.
+def insert(table: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Insert a single row and return the inserted record.
+
+    Raises DatabaseError on failure.
     """
     try:
         response = get_client().table(table).insert(data).execute()
-    except Exception as exc:
-        _handle_exception(exc)
-
-    if not response.data:
+        if response.data:
+            return response.data[0]
         raise DatabaseError(f"Insert into '{table}' returned no data")
-    return response.data[0]
+    except DatabaseError:
+        raise
+    except Exception as exc:
+        raise DatabaseError(f"Insert into '{table}' failed: {exc}") from exc
 
 
 def select(
@@ -79,19 +75,19 @@ def select(
     columns: str = "*",
     filters: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Select rows from *table*, optionally filtered by equality conditions.
+    """Select rows from a table with optional equality filters.
 
-    Returns an empty list when no rows match.
+    Returns a (possibly empty) list of matching records.
     """
     try:
         query = get_client().table(table).select(columns)
-        for col, val in (filters or {}).items():
-            query = query.eq(col, val)
+        if filters:
+            for col, val in filters.items():
+                query = query.eq(col, val)
         response = query.execute()
+        return response.data or []
     except Exception as exc:
-        _handle_exception(exc)
-
-    return response.data or []
+        raise DatabaseError(f"Select from '{table}' failed: {exc}") from exc
 
 
 def select_one(
@@ -99,12 +95,11 @@ def select_one(
     columns: str = "*",
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Select exactly one row.  Raises *RecordNotFoundError* if none match."""
+    """Select exactly one row. Raises RecordNotFoundError if none found."""
     rows = select(table, columns, filters)
     if not rows:
         raise RecordNotFoundError(
-            f"No record found in '{table}'",
-            detail=filters,
+            f"No record found in '{table}' matching {filters}"
         )
     return rows[0]
 
@@ -114,45 +109,15 @@ def update(
     data: dict[str, Any],
     filters: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Update rows matching *filters* and return the updated records.
+    """Update rows matching the given equality filters.
 
-    Raises:
-        DatabaseError: on any Supabase/Postgres error.
+    Returns the list of updated records.
     """
     try:
         query = get_client().table(table).update(data)
         for col, val in filters.items():
             query = query.eq(col, val)
         response = query.execute()
+        return response.data or []
     except Exception as exc:
-        _handle_exception(exc)
-
-    return response.data or []
-
-
-def update_one(
-    table: str,
-    data: dict[str, Any],
-    filters: dict[str, Any],
-) -> dict[str, Any]:
-    """Update exactly one row.  Raises *RecordNotFoundError* if none match."""
-    rows = update(table, data, filters)
-    if not rows:
-        raise RecordNotFoundError(
-            f"No record updated in '{table}'",
-            detail=filters,
-        )
-    return rows[0]
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _handle_exception(exc: Exception) -> None:
-    """Translate Supabase / PostgREST errors into application exceptions."""
-    msg = str(exc)
-    # PostgREST surfaces unique-violation as code 23505
-    if "23505" in msg or "duplicate key" in msg.lower():
-        raise DuplicateRecordError("Duplicate record", detail=msg) from exc
-    raise DatabaseError(f"Database operation failed: {msg}", detail=msg) from exc
+        raise DatabaseError(f"Update on '{table}' failed: {exc}") from exc

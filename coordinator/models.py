@@ -1,10 +1,17 @@
-"""Pydantic request/response models and internal configuration objects."""
+"""Pydantic request and response models for the Coordinator API.
+
+Only the models needed for the task lifecycle endpoints are defined here.
+Additional models (registration, job submission, etc.) will be added as
+their respective endpoints are implemented.
+"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 
+class TaskCompleteRequest(BaseModel):
+    """Body for POST /api/tasks/{id}/complete."""
 # ---------------------------------------------------------------------------
 # Request Models
 # ---------------------------------------------------------------------------
@@ -53,87 +60,15 @@ class TaskCompleteRequest(BaseModel):
 
 
 class TaskFailRequest(BaseModel):
-    """Sent by a Worker when a task fails."""
+    """Body for POST /api/tasks/{id}/fail."""
 
     error_message: str
 
 
-# ---------------------------------------------------------------------------
-# Response Models
-# ---------------------------------------------------------------------------
-
-
-class NodeRegistrationResponse(BaseModel):
-    """Returned to a Worker after successful registration."""
-
-    node_db_id: str
-    auth_token: str
-
-
-class JobSubmissionResponse(BaseModel):
-    """Returned after a job is successfully created."""
-
-    job_id: str
-
-
-class TaskPollResponse(BaseModel):
-    """Returned when a Worker polls for work.
-
-    All fields are optional — an empty response (all ``None``) means no task
-    is available.
-    """
-
-    task_id: str | None = None
-    job_id: str | None = None
-    dataset_name: str | None = None
-    model_type: str | None = None
-    hyperparameters: dict | None = None
-    shard_index: int | None = None
-    shard_count: int | None = None
-
-
-class AggregatedMetrics(BaseModel):
-    """Aggregated metrics for a completed job."""
-
-    mean_loss: float | None = None
-    mean_accuracy: float | None = None
-    per_node: list[dict] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Internal Configuration Models
-# ---------------------------------------------------------------------------
-
-
-class HyperParameters(BaseModel):
-    """Structured hyperparameters for a training job."""
-
-    learning_rate: float = Field(gt=0, default=0.001)
-    epochs: int = Field(gt=0, default=10)
-    batch_size: int = Field(gt=0, default=32)
-    hidden_layers: list[int] = Field(default_factory=lambda: [128, 64])
-    activation: str = Field(default="relu")
-
-
-class JobConfig(BaseModel):
-    """Internal structured representation of a job configuration.
-
-    Used for validation, serialization round-trips, and task config generation.
-    """
-
-    dataset_name: str
-    model_type: str
-    hyperparameters: HyperParameters
-    shard_count: int = Field(gt=0)
-
-
-class TaskConfig(BaseModel):
-    """Configuration payload sent to a Worker for a single task."""
+class MetricsReportRequest(BaseModel):
+    """Body for POST /api/metrics."""
 
     task_id: str
-    job_id: str
-    dataset_name: str
-    model_type: str
-    hyperparameters: HyperParameters
-    shard_index: int
-    shard_count: int
+    epoch: int = Field(ge=0)
+    loss: float | None = None
+    accuracy: float | None = None
