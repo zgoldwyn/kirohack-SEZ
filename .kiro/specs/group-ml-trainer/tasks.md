@@ -54,7 +54,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 7.1, 7.2_
 
 - [ ] 3. Pydantic models for API layer
-  - [ ] 3.1 Implement `coordinator/models.py` — Request and response models
+  - [x] 3.1 Implement `coordinator/models.py` — Request and response models
     - Define `NodeRegistrationRequest`, `NodeRegistrationResponse`
     - Define `JobSubmissionRequest`, `JobSubmissionResponse`
     - Define `MetricsReportRequest`, `TaskCompleteRequest`, `TaskFailRequest`
