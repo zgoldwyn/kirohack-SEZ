@@ -92,11 +92,11 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Property 11: Auth tokens are unique across all registered nodes**
     - **Validates: Requirements 8.1, 8.2, 8.3**
 
-- [ ] 6. Checkpoint — Ensure all tests pass
+- [x] 6. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Node registration endpoint
-  - [ ] 7.1 Implement `POST /api/nodes/register` endpoint
+- [x] 7. Node registration endpoint
+  - [x] 7.1 Implement `POST /api/nodes/register` endpoint
     - Validate request body using `NodeRegistrationRequest` model
     - Check for duplicate `node_id` — return 409 if already registered
     - Generate auth token, hash it, store node record with status "idle"
@@ -112,14 +112,14 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test duplicate node_id returns 409
     - _Requirements: 1.1, 1.2, 1.4_
 
-- [ ] 8. Heartbeat endpoint and staleness monitor
-  - [ ] 8.1 Implement `POST /api/nodes/heartbeat` endpoint
+- [x] 8. Heartbeat endpoint and staleness monitor
+  - [x] 8.1 Implement `POST /api/nodes/heartbeat` endpoint
     - Authenticate request using auth dependency
     - Update `last_heartbeat` timestamp for the authenticated node
     - If node was "offline", set status back to "idle"
     - _Requirements: 2.1, 2.3_
 
-  - [ ] 8.2 Implement `coordinator/heartbeat.py` — Background staleness monitor
+  - [x] 8.2 Implement `coordinator/heartbeat.py` — Background staleness monitor
     - Background task (asyncio) that runs every 10 seconds
     - Scans all nodes, marks those with `last_heartbeat` > 30 seconds ago as "offline"
     - If an offline node has tasks in "assigned" or "running" status, mark those tasks as "failed" with error "node went offline"
@@ -136,8 +136,8 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test offline node with running task → task marked failed
     - _Requirements: 2.1, 2.2, 2.3_
 
-- [ ] 9. Job submission endpoint
-  - [ ] 9.1 Implement `POST /api/jobs` endpoint
+- [x] 9. Job submission endpoint
+  - [x] 9.1 Implement `POST /api/jobs` endpoint
     - Validate request using `JobSubmissionRequest` model
     - Validate dataset_name and model_type using config_parser
     - Count idle nodes; reject if shard_count > idle_node_count (HTTP 400)
