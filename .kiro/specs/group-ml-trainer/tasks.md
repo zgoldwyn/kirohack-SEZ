@@ -273,32 +273,32 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 11.1, 11.3_
 
 - [ ] 18. Worker client implementation
-  - [ ] 18.1 Implement `worker/config.py` — Task configuration parsing
+  - [x] 18.1 Implement `worker/config.py` — Task configuration parsing
     - Parse `TaskConfig` JSON received from Coordinator into local training parameters
     - Extract dataset_name, model_type, hyperparameters, shard_index, shard_count
     - _Requirements: 5.1, 5.5_
 
-  - [ ] 18.2 Implement `worker/reporter.py` — HTTP client for Coordinator communication
+  - [x] 18.2 Implement `worker/reporter.py` — HTTP client for Coordinator communication
     - Functions: `register()`, `heartbeat()`, `poll_task()`, `start_task()`, `report_metrics()`, `request_upload_url()`, `complete_task()`, `fail_task()`
     - Include auth token in Authorization header for all authenticated requests
     - Handle 401 response: stop all loops, surface auth error for operator action
     - Implement retry with exponential backoff for transient failures (503, network errors)
     - _Requirements: 5.2, 5.3, 5.4, 8.1_
 
-  - [ ] 18.3 Implement `worker/storage.py` — Checkpoint upload via signed URL
+  - [x] 18.3 Implement `worker/storage.py` — Checkpoint upload via signed URL
     - Receive signed upload URL from Coordinator (via `reporter.request_upload_url()`)
     - Upload final checkpoint file via plain HTTP PUT/POST to the signed URL using `httpx` — no Supabase client library needed
     - Return success/failure status
     - Handle upload failure: report task failure to Coordinator
     - _Requirements: 7.1_
 
-  - [ ] 18.4 Implement `worker/state.py` — Local worker state persistence
+  - [x] 18.4 Implement `worker/state.py` — Local worker state persistence
     - On successful registration, persist `auth_token`, `node_db_id`, and `coordinator_url` to a local JSON file (e.g., `~/.group-ml-trainer/worker_state.json`)
     - On startup, check for existing state file: if present and valid, skip registration and reuse stored credentials
     - If auth token is rejected (401), delete the state file and exit for operator action
     - _Requirements: 1.1, 8.1_
 
-  - [ ] 18.5 Implement `worker/datasets.py` — Dataset loading and shard partitioning
+  - [x] 18.5 Implement `worker/datasets.py` — Dataset loading and shard partitioning
     - Load MNIST, Fashion-MNIST via torchvision
     - Implement synthetic dataset generation
     - Partition dataset by shard_index and shard_count (deterministic split)
