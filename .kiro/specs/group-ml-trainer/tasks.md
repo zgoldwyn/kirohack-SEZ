@@ -34,7 +34,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Use Python `enum.Enum` or string constants — import everywhere instead of hardcoding strings
     - _Requirements: 3.5, 3.6_
 
-  - [ ] 1.5 Create database schema verification script
+  - [x] 1.5 Create database schema verification script
     - Create `scripts/verify_schema.sql` (or `scripts/bootstrap.sql`) containing the full CREATE TABLE / CREATE INDEX statements for all 5 tables (nodes, jobs, tasks, metrics, artifacts) and the `checkpoints` storage bucket
     - Create `scripts/verify_schema.py` that connects to Supabase and verifies all required tables, columns, indexes, and the storage bucket exist
     - Document required environment setup in a `README.md` or `SETUP.md`
@@ -47,7 +47,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Wrap Supabase errors into consistent application exceptions
     - _Requirements: 1.1, 3.1_
 
-  - [ ] 2.2 Implement `coordinator/storage.py` — Supabase Storage signed URL generation
+  - [x] 2.2 Implement `coordinator/storage.py` — Supabase Storage signed URL generation
     - Create function to generate time-limited signed upload URLs for the `checkpoints` bucket
     - Path convention: `{job_id}/{task_id}/final.pt`
     - Workers do not hold direct Supabase credentials; they use signed URLs
@@ -65,7 +65,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 1.1, 1.3, 3.1, 3.4, 12.1_
 
 - [ ] 4. Configuration parsing and validation
-  - [ ] 4.1 Implement `coordinator/config_parser.py` — Job config parsing and task config generation
+  - [x] 4.1 Implement `coordinator/config_parser.py` — Job config parsing and task config generation
     - Parse `JobSubmissionRequest` into structured `JobConfig` object
     - Validate dataset_name against supported set {MNIST, Fashion-MNIST, synthetic}
     - Validate model_type against supported set {MLP}
@@ -248,8 +248,8 @@ This plan implements a distributed ML task orchestration platform with three com
 - [ ] 15. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Dashboard read endpoints and monitoring
-  - [ ] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
+- [x] 16. Dashboard read endpoints and monitoring
+  - [x] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
     - `GET /api/nodes` — List all nodes with status, hardware info, last heartbeat
     - `GET /api/jobs` — List all jobs with status, model type, dataset, shard count, timestamps
     - `GET /api/jobs/{id}` — Job detail with tasks, per-task status, aggregated metrics
@@ -257,7 +257,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - `GET /api/jobs/{id}/artifacts` — List artifacts for a job
     - _Requirements: 2.4, 6.3, 7.3, 9.1, 10.1_
 
-  - [ ] 16.2 Implement `GET /api/monitoring/summary` endpoint
+  - [x] 16.2 Implement `GET /api/monitoring/summary` endpoint
     - Return counts: online nodes, idle nodes, busy nodes, offline nodes, queued jobs, running jobs, completed jobs, failed jobs
     - _Requirements: 11.2_
 
