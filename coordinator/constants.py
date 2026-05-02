@@ -4,12 +4,16 @@ from enum import Enum
 
 
 class NodeStatus(str, Enum):
+    """Possible statuses for a registered worker node."""
+
     IDLE = "idle"
     BUSY = "busy"
     OFFLINE = "offline"
 
 
 class JobStatus(str, Enum):
+    """Possible statuses for a training job."""
+
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -17,6 +21,8 @@ class JobStatus(str, Enum):
 
 
 class TaskStatus(str, Enum):
+    """Possible statuses for an individual task within a job."""
+
     QUEUED = "queued"
     ASSIGNED = "assigned"
     RUNNING = "running"
@@ -24,17 +30,16 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
-class SupportedDataset(str, Enum):
-    MNIST = "MNIST"
-    FASHION_MNIST = "Fashion-MNIST"
-    SYNTHETIC = "synthetic"
-
-
-class SupportedModelType(str, Enum):
-    MLP = "MLP"
-
-
 class ArtifactType(str, Enum):
+    """Types of artifacts produced by tasks."""
+
     CHECKPOINT = "checkpoint"
     LOG = "log"
     OUTPUT = "output"
+
+
+# Supported datasets (core MVP)
+SUPPORTED_DATASETS = {"MNIST", "Fashion-MNIST", "synthetic"}
+
+# Supported model types
+SUPPORTED_MODEL_TYPES = {"MLP"}

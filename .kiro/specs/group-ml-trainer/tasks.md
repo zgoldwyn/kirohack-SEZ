@@ -191,13 +191,13 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test busy node gets no task
     - _Requirements: 4.3, 4.4, 4.5_
 
-- [ ] 12. Task lifecycle endpoints
-  - [ ] 12.1 Implement `POST /api/tasks/{id}/start` endpoint
+- [x] 12. Task lifecycle endpoints
+  - [x] 12.1 Implement `POST /api/tasks/{id}/start` endpoint
     - Authenticate request, verify task is assigned to requesting node
     - Update task status to "running", set `started_at`
     - _Requirements: 5.1_
 
-  - [ ] 12.2 Implement `POST /api/tasks/{id}/complete` endpoint
+  - [x] 12.2 Implement `POST /api/tasks/{id}/complete` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Accept `TaskCompleteRequest` with checkpoint_path and optional final metrics
     - Update task status to "completed", set `completed_at`, store `checkpoint_path`
@@ -207,7 +207,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Check if job should be marked failed (some failed, none queued/assigned/running)
     - _Requirements: 5.3, 7.1, 7.2, 6.1, 6.4_
 
-  - [ ] 12.3 Implement `POST /api/tasks/{id}/fail` endpoint
+  - [x] 12.3 Implement `POST /api/tasks/{id}/fail` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Accept `TaskFailRequest` with error_message
     - Update task status to "failed", set `error_message`, set `completed_at`
@@ -215,14 +215,14 @@ This plan implements a distributed ML task orchestration platform with three com
     - Check if job should be marked failed (no tasks queued/assigned/running remaining)
     - _Requirements: 5.4, 6.4_
 
-  - [ ] 12.4 Implement `POST /api/tasks/{id}/upload-url` endpoint
+  - [x] 12.4 Implement `POST /api/tasks/{id}/upload-url` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Generate signed upload URL using `storage.py` for path `{job_id}/{task_id}/final.pt`
     - Return the signed URL
     - _Requirements: 7.1_
 
-- [ ] 13. Metrics reporting endpoint
-  - [ ] 13.1 Implement `POST /api/metrics` endpoint
+- [x] 13. Metrics reporting endpoint
+  - [x] 13.1 Implement `POST /api/metrics` endpoint
     - Authenticate request
     - Accept `MetricsReportRequest` with task_id, epoch, loss, accuracy
     - Insert record into metrics table with job_id, task_id, node_id, epoch, loss, accuracy
@@ -248,8 +248,8 @@ This plan implements a distributed ML task orchestration platform with three com
 - [ ] 15. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Dashboard read endpoints and monitoring
-  - [ ] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
+- [x] 16. Dashboard read endpoints and monitoring
+  - [x] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
     - `GET /api/nodes` — List all nodes with status, hardware info, last heartbeat
     - `GET /api/jobs` — List all jobs with status, model type, dataset, shard count, timestamps
     - `GET /api/jobs/{id}` — Job detail with tasks, per-task status, aggregated metrics
@@ -257,7 +257,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - `GET /api/jobs/{id}/artifacts` — List artifacts for a job
     - _Requirements: 2.4, 6.3, 7.3, 9.1, 10.1_
 
-  - [ ] 16.2 Implement `GET /api/monitoring/summary` endpoint
+  - [x] 16.2 Implement `GET /api/monitoring/summary` endpoint
     - Return counts: online nodes, idle nodes, busy nodes, offline nodes, queued jobs, running jobs, completed jobs, failed jobs
     - _Requirements: 11.2_
 
@@ -273,44 +273,44 @@ This plan implements a distributed ML task orchestration platform with three com
     - _Requirements: 11.1, 11.3_
 
 - [ ] 18. Worker client implementation
-  - [ ] 18.1 Implement `worker/config.py` — Task configuration parsing
+  - [x] 18.1 Implement `worker/config.py` — Task configuration parsing
     - Parse `TaskConfig` JSON received from Coordinator into local training parameters
     - Extract dataset_name, model_type, hyperparameters, shard_index, shard_count
     - _Requirements: 5.1, 5.5_
 
-  - [ ] 18.2 Implement `worker/reporter.py` — HTTP client for Coordinator communication
+  - [x] 18.2 Implement `worker/reporter.py` — HTTP client for Coordinator communication
     - Functions: `register()`, `heartbeat()`, `poll_task()`, `start_task()`, `report_metrics()`, `request_upload_url()`, `complete_task()`, `fail_task()`
     - Include auth token in Authorization header for all authenticated requests
     - Handle 401 response: stop all loops, surface auth error for operator action
     - Implement retry with exponential backoff for transient failures (503, network errors)
     - _Requirements: 5.2, 5.3, 5.4, 8.1_
 
-  - [ ] 18.3 Implement `worker/storage.py` — Checkpoint upload via signed URL
+  - [x] 18.3 Implement `worker/storage.py` — Checkpoint upload via signed URL
     - Receive signed upload URL from Coordinator (via `reporter.request_upload_url()`)
     - Upload final checkpoint file via plain HTTP PUT/POST to the signed URL using `httpx` — no Supabase client library needed
     - Return success/failure status
     - Handle upload failure: report task failure to Coordinator
     - _Requirements: 7.1_
 
-  - [ ] 18.4 Implement `worker/state.py` — Local worker state persistence
+  - [x] 18.4 Implement `worker/state.py` — Local worker state persistence
     - On successful registration, persist `auth_token`, `node_db_id`, and `coordinator_url` to a local JSON file (e.g., `~/.group-ml-trainer/worker_state.json`)
     - On startup, check for existing state file: if present and valid, skip registration and reuse stored credentials
     - If auth token is rejected (401), delete the state file and exit for operator action
     - _Requirements: 1.1, 8.1_
 
-  - [ ] 18.5 Implement `worker/datasets.py` — Dataset loading and shard partitioning
+  - [x] 18.5 Implement `worker/datasets.py` — Dataset loading and shard partitioning
     - Load MNIST, Fashion-MNIST via torchvision
     - Implement synthetic dataset generation
     - Partition dataset by shard_index and shard_count (deterministic split)
     - CIFAR-10 is stretch goal, not required for MVP
     - _Requirements: 3.5, 5.1_
 
-  - [ ] 18.6 Implement `worker/models.py` — MLP model definition
+  - [x] 18.6 Implement `worker/models.py` — MLP model definition
     - Configurable MLP: input size (derived from dataset), hidden layers list, output size, activation function
     - Support relu activation (default)
     - _Requirements: 3.6, 5.1_
 
-  - [ ] 18.7 Implement `worker/trainer.py` — PyTorch training loop
+  - [x] 18.7 Implement `worker/trainer.py` — PyTorch training loop
     - Load dataset shard using `datasets.py`
     - Instantiate model using `models.py`
     - Train for configured epochs with configured hyperparameters (learning_rate, batch_size)
@@ -344,28 +344,28 @@ This plan implements a distributed ML task orchestration platform with three com
     - This milestone proves the core loop works before adding multi-node, failure semantics, or dashboard polish
     - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.1, 5.2, 5.3, 6.1, 6.2, 7.1_
 
-- [ ] 21. Dashboard frontend
-  - [ ] 21.1 Implement system overview page (`/`)
+- [x] 21. Dashboard frontend
+  - [x] 21.1 Implement system overview page (`/`)
     - Fetch monitoring summary from `GET /api/monitoring/summary`
     - Display online node count, running job count, quick links to nodes and jobs pages
     - Use SWR with 10-second refresh interval
     - _Requirements: 11.4_
 
-  - [ ] 21.2 Implement nodes page (`/nodes`)
+  - [x] 21.2 Implement nodes page (`/nodes`)
     - Fetch node list from `GET /api/nodes`
     - Display table: node_id, hostname, GPU, RAM, CPU cores, status, last heartbeat
     - Visual status indicators: idle=green, busy=yellow, offline=red
     - Auto-refresh with SWR (10-second interval)
     - _Requirements: 9.1, 9.2, 9.3_
 
-  - [ ] 21.3 Implement jobs list page (`/jobs`)
+  - [x] 21.3 Implement jobs list page (`/jobs`)
     - Fetch job list from `GET /api/jobs`
     - Display table: job_id, job_name, status, model_type, dataset, shard_count, created_at, completed_at
     - Link each job to detail page
     - Auto-refresh with SWR
     - _Requirements: 10.1_
 
-  - [ ] 21.4 Implement job detail page (`/jobs/[id]`)
+  - [x] 21.4 Implement job detail page (`/jobs/[id]`)
     - Fetch job detail from `GET /api/jobs/{id}`
     - Display per-task progress: assigned node, status, current epoch, latest loss, accuracy
     - Display aggregated metrics on completion (mean loss, mean accuracy, per-node breakdown)
@@ -374,7 +374,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Auto-refresh with SWR (5-second interval for running jobs)
     - _Requirements: 10.2, 10.3, 10.4, 6.3, 7.3_
 
-  - [ ] 21.5 Implement job submission page (`/jobs/new`)
+  - [x] 21.5 Implement job submission page (`/jobs/new`)
     - Form with fields: job_name (optional), dataset selector (MNIST, Fashion-MNIST, synthetic), model_type (MLP), shard_count, hyperparameters (learning_rate, epochs, batch_size, hidden_layers)
     - Submit to `POST /api/jobs`
     - Display validation errors from API response
