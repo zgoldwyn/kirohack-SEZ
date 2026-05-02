@@ -1,67 +1,85 @@
-"""Supabase Storage helpers for signed upload URL generation.
-
-Workers do not hold direct Supabase credentials. Instead, the
-Coordinator generates time-limited signed upload URLs that Workers
-use to upload checkpoint files to the ``checkpoints`` bucket.
-
-Path convention: ``{job_id}/{task_id}/final.pt``
-"""
+"""Supabase Storage helpers for checkpoint upload URL generation."""
 
 from __future__ import annotations
 
-import logging
+from typing import Any
 
-from coordinator import db
+from coordinator.db import DatabaseError, get_client
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-BUCKET_NAME = "checkpoints"
-
-# Default signed URL validity in seconds (10 minutes)
-_DEFAULT_EXPIRY_SECONDS = 600
+CHECKPOINTS_BUCKET = "checkpoints"
 
 
-def generate_signed_upload_url(
-    job_id: str,
-    task_id: str,
-    expiry_seconds: int = _DEFAULT_EXPIRY_SECONDS,
-) -> str:
-    """Generate a time-limited signed upload URL for a checkpoint.
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
 
-    Parameters
-    ----------
-    job_id:
-        The job UUID.
-    task_id:
-        The task UUID.
-    expiry_seconds:
-        How long the URL remains valid (default 600 s / 10 min).
 
-    Returns
-    -------
-    str
-        The signed upload URL.
+class StorageError(DatabaseError):
+    """Raised when a Supabase Storage operation fails."""
 
-    Raises
-    ------
-    Exception
-        If the Supabase storage call fails.
+
+# ---------------------------------------------------------------------------
+# Signed upload URL generation
+# ---------------------------------------------------------------------------
+
+
+def create_signed_upload_url(job_id: str, task_id: str) -> dict[str, Any]:
+    """Generate a signed upload URL for a task checkpoint.
+
+    The URL follows the path convention ``{job_id}/{task_id}/final.pt`` inside
+    the ``checkpoints`` bucket.  Signed upload URLs are valid for 2 hours
+    (Supabase default) and allow the holder to upload a file without further
+    authentication.
+
+    Workers use these URLs to upload checkpoint files directly to Supabase
+    Storage — they never hold privileged Supabase credentials.
+
+    Returns:
+        A dict with ``signed_url`` (the upload URL) and ``path`` (the storage
+        path) keys.  The ``token`` field from Supabase is included as well so
+        callers can use ``upload_to_signed_url`` if needed.
+
+    Raises:
+        StorageError: if the signed URL could not be created.
     """
-    path = f"{job_id}/{task_id}/final.pt"
-    client = db.get_client()
-    result = client.storage.from_(BUCKET_NAME).create_signed_upload_url(path)
+    storage_path = f"{job_id}/{task_id}/final.pt"
 
-    # The Supabase Python client returns a dict with "signed_url" (or "signedURL")
-    if isinstance(result, dict):
-        signed_url = result.get("signed_url") or result.get("signedURL") or result.get("data", {}).get("signed_url", "")
-    else:
-        # Fallback: treat as string
-        signed_url = str(result)
-
-    if not signed_url:
-        raise RuntimeError(
-            f"Failed to generate signed upload URL for path '{path}'"
+    try:
+        response = (
+            get_client()
+            .storage
+            .from_(CHECKPOINTS_BUCKET)
+            .create_signed_upload_url(storage_path)
         )
+    except Exception as exc:
+        raise StorageError(
+            f"Failed to create signed upload URL for '{storage_path}'",
+            detail=str(exc),
+        ) from exc
 
-    logger.info("Generated signed upload URL for %s", path)
-    return signed_url
+    # The response is a dict with 'signed_url' and 'token' (among others).
+    if not response or "signed_url" not in (response if isinstance(response, dict) else {}):
+        # Depending on the supabase-py version the shape may vary; handle
+        # both dict and object-with-attributes.
+        signed_url = getattr(response, "signed_url", None)
+        token = getattr(response, "token", None)
+        if signed_url is None:
+            raise StorageError(
+                f"Unexpected response when creating signed upload URL for '{storage_path}'",
+                detail=str(response),
+            )
+        return {
+            "signed_url": signed_url,
+            "token": token,
+            "path": storage_path,
+        }
+
+    return {
+        "signed_url": response["signed_url"],
+        "token": response.get("token"),
+        "path": storage_path,
+    }
