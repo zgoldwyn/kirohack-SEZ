@@ -1,21 +1,28 @@
 """Authentication module for Worker token validation.
 
-Provides SHA-256 hashing for token storage and a FastAPI dependency
-that extracts the Bearer token from the Authorization header, hashes
-it, looks up the corresponding node in the database, and returns the
-node record or raises HTTP 401.
+Provides token generation via ``secrets.token_urlsafe``, SHA-256
+hashing for storage, and a FastAPI dependency that extracts the Bearer
+token from the Authorization header, hashes it, looks up the
+corresponding node in the database, and returns the node record or
+raises HTTP 401.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 
 from coordinator import db
 
 logger = logging.getLogger(__name__)
+
+
+def generate_token() -> str:
+    """Generate a cryptographically secure auth token for a Worker node."""
+    return secrets.token_urlsafe(32)
 
 
 def hash_token(token: str) -> str:
