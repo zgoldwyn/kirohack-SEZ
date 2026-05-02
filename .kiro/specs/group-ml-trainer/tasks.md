@@ -23,7 +23,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Install SWR for data fetching
     - _Requirements: 9.1, 10.1_
 
-  - [ ] 1.4 Create shared constants and enums
+  - [x] 1.4 Create shared constants and enums
     - Create `coordinator/constants.py` with enums/constants for:
       - Node statuses: `idle`, `busy`, `offline`
       - Job statuses: `queued`, `running`, `completed`, `failed`
