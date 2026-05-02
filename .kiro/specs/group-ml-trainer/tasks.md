@@ -81,7 +81,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Validates: Requirements 3.2, 3.4, 12.2, 12.3, 12.4**
 
 - [ ] 5. Auth module
-  - [ ] 5.1 Implement `coordinator/auth.py` — Token generation, hashing, and FastAPI dependency
+  - [x] 5.1 Implement `coordinator/auth.py` — Token generation, hashing, and FastAPI dependency
     - Token generation using `secrets.token_urlsafe(32)`
     - SHA-256 hashing for storage
     - FastAPI dependency `get_current_node` that extracts token from `Authorization` header, hashes it, looks up in `nodes` table, returns node record or raises HTTP 401
