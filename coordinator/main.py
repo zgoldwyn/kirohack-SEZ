@@ -14,6 +14,8 @@ from coordinator.constants import ArtifactType, NodeStatus, TaskStatus
 from coordinator.models import MetricsReportRequest, TaskCompleteRequest, TaskFailRequest
 from coordinator.storage import generate_signed_upload_url
 
+from coordinator.dashboard import router as dashboard_router
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,9 @@ app = FastAPI(
     description="Distributed ML task orchestration platform coordinator service.",
     version="0.1.0",
 )
+
+# Dashboard read endpoints (unauthenticated, local/demo only)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
