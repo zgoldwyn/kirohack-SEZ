@@ -319,7 +319,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Handle training exceptions (OOM, NaN loss): catch and report failure
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-  - [ ] 18.8 Implement `worker/main.py` — Entry point with registration, heartbeat, and poll loops
+  - [x] 18.8 Implement `worker/main.py` — Entry point with registration, heartbeat, and poll loops
     - On startup: check for existing state file (`worker/state.py`); if valid, reuse credentials; otherwise register with Coordinator
     - Store auth token and node_db_id via `worker/state.py`
     - Start heartbeat loop (every 10 seconds) in background thread
