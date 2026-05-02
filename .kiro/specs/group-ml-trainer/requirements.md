@@ -2,21 +2,31 @@
 
 ## Introduction
 
-Group ML Trainer is a distributed compute orchestration platform that pools underused networked hardware to split machine learning training workloads across connected nodes. The system coordinates a central server (Coordinator) with multiple worker nodes (Workers) and a web-based dashboard (Dashboard), enabling users to submit ML training jobs that are distributed, executed, and aggregated across available hardware. The platform targets local and shared external hardware running PyTorch-based workloads, with an initial focus on MLP models trained on small benchmark datasets.
+Group ML Trainer is a distributed compute orchestration platform that pools underused networked hardware to execute machine learning training tasks across connected nodes. For the MVP, each worker trains an independent model instance on its assigned task or dataset shard, and the system aggregates metrics and artifacts across the job. The system coordinates a central server (Coordinator) with multiple worker nodes (Workers) and a web-based dashboard (Dashboard), enabling users to submit ML training jobs that are partitioned into independent tasks, executed across available hardware, and tracked through aggregated metrics and artifacts. The platform targets local and shared external hardware running PyTorch-based workloads, with an initial focus on MLP models trained on small benchmark datasets.
+
+> Group ML Trainer coordinates multi-node ML task execution rather than full synchronized distributed training in the MVP.
+
+### MVP Training Strategy
+
+For the MVP, each Task represents an independent training run executed by a single Worker using the assigned configuration and dataset shard. The system aggregates task-level metrics and artifacts across the Job, but does not perform synchronized gradient exchange or produce a single merged global model.
+
+### Out of Scope for MVP
+
+Synchronized gradient exchange, model-parallel training, automatic checkpoint merging, and production-grade distributed deep learning frameworks are out of scope.
 
 ## Glossary
 
 - **Coordinator**: The central backend server responsible for node registration, job submission, task assignment, heartbeat tracking, training state coordination, result aggregation, and logging.
 - **Worker**: A networked machine that registers with the Coordinator, reports available resources, receives and executes training tasks, and returns results.
-- **Job**: A complete ML training workload submitted by a user, composed of one or more Tasks.
-- **Task**: A unit of work assigned to a single Worker, representing a shard of a Job (e.g., a data partition or model shard).
+- **Job**: A complete ML training workload submitted by a user, composed of one or more independent Tasks whose results are aggregated at the metrics and artifact level.
+- **Task**: A unit of work assigned to a single Worker, representing an independent training run for part of a Job, typically using a dataset shard or task-specific configuration.
 - **Node**: A registered Worker instance identified by a unique node ID.
 - **Heartbeat**: A periodic signal sent by a Worker to the Coordinator to indicate the Worker is alive and operational.
 - **Checkpoint**: A serialized snapshot of model weights and optimizer state saved at a point during training.
 - **Artifact**: Any file output produced by a Job or Task, including checkpoints, logs, and model outputs.
 - **Dashboard**: The web-based frontend that displays system status, node health, job progress, and metrics.
 - **Auth_Token**: A secret credential issued to a Worker upon registration, used to authenticate subsequent requests to the Coordinator.
-- **Shard**: A partition of a dataset or model assigned to a single Worker for parallel processing.
+- **Shard**: A partition of a dataset or task configuration assigned to a single Worker for independent processing.
 - **Metrics**: Numerical training measurements (e.g., loss, accuracy) reported by Workers during and after Task execution.
 - **Registry**: The Coordinator's internal store of all registered Nodes and their reported resource information.
 
@@ -60,7 +70,7 @@ Group ML Trainer is a distributed compute orchestration platform that pools unde
 2. IF a user submits a Job with an unsupported dataset name or model type, THEN THE Coordinator SHALL reject the submission and return a descriptive error message listing supported options.
 3. IF a user submits a Job with a shard count greater than the number of currently idle Nodes, THEN THE Coordinator SHALL reject the submission and return an error message indicating insufficient available nodes.
 4. THE Coordinator SHALL validate that all required Job configuration fields are present before creating a Job record.
-5. THE Coordinator SHALL support the following datasets: MNIST, Fashion-MNIST, CIFAR-10, and synthetic data.
+5. THE Coordinator SHALL support the following datasets: MNIST, Fashion-MNIST, and synthetic data. CIFAR-10 is a stretch goal.
 6. THE Coordinator SHALL support the following model types: MLP.
 
 ---
@@ -71,7 +81,7 @@ Group ML Trainer is a distributed compute orchestration platform that pools unde
 
 #### Acceptance Criteria
 
-1. WHEN a Job is created with status "queued", THE Coordinator SHALL split the Job into the specified number of Shards and create one Task per Shard.
+1. WHEN a Job is created with status "queued", THE Coordinator SHALL split the Job into the specified number of independent Tasks, one per dataset shard or task configuration.
 2. THE Coordinator SHALL assign each Task to a distinct idle Node, updating the Node's status to "busy" upon assignment.
 3. WHEN a Worker polls for work, THE Coordinator SHALL return the assigned Task configuration (dataset shard index, model type, hyperparameters, and total shard count) if a Task is assigned to that Node.
 4. IF no Task is assigned to the polling Worker, THEN THE Coordinator SHALL return an empty response indicating no work is available.
@@ -85,7 +95,7 @@ Group ML Trainer is a distributed compute orchestration platform that pools unde
 
 #### Acceptance Criteria
 
-1. WHEN a Worker receives a Task configuration, THE Worker SHALL download or generate the assigned dataset Shard and begin training the specified model using PyTorch.
+1. WHEN a Worker receives a Task configuration, THE Worker SHALL load the assigned dataset shard or task input and train an independent instance of the specified model using PyTorch.
 2. WHILE a Task is executing, THE Worker SHALL report Metrics (loss and accuracy per epoch) to the Coordinator at the end of each training epoch.
 3. WHEN a Task completes successfully, THE Worker SHALL upload the resulting Checkpoint to the configured storage backend and notify the Coordinator with the Checkpoint location and final Metrics.
 4. IF a Task fails due to an exception during training, THEN THE Worker SHALL report the failure to the Coordinator with a descriptive error message and set the Task status to "failed".
@@ -95,14 +105,15 @@ Group ML Trainer is a distributed compute orchestration platform that pools unde
 
 ### Requirement 6: Result Aggregation
 
-**User Story:** As a user, I want the Coordinator to aggregate results from all completed Tasks in a Job, so that I can retrieve a unified training outcome.
+**User Story:** As a user, I want the Coordinator to aggregate results from all completed Tasks in a Job, so that I can retrieve a unified view of distributed training results.
 
 #### Acceptance Criteria
 
 1. WHEN all Tasks in a Job reach status "completed", THE Coordinator SHALL aggregate the Metrics from all Tasks and update the Job status to "completed".
 2. THE Coordinator SHALL store the aggregated Metrics (mean loss, mean accuracy, per-node breakdown) in the Job record upon Job completion.
-3. WHEN a user requests Job results, THE Coordinator SHALL return the aggregated Metrics and the list of Checkpoint locations for the completed Job.
+3. WHEN a user requests Job results, THE Coordinator SHALL return the aggregated Metrics and the list of per-Task Checkpoint locations for the completed Job.
 4. IF one or more Tasks in a Job reach status "failed" and no Tasks remain in status "running" or "queued", THEN THE Coordinator SHALL update the Job status to "failed" and include the per-Task error messages in the Job record.
+5. THE Coordinator SHALL aggregate task-level Metrics and artifact references across the Job and SHALL NOT assume that Task Checkpoints can be merged into a single model artifact in the MVP.
 
 ---
 
@@ -112,10 +123,11 @@ Group ML Trainer is a distributed compute orchestration platform that pools unde
 
 #### Acceptance Criteria
 
-1. WHEN a Worker uploads a Checkpoint, THE Coordinator SHALL store the Checkpoint file in the configured storage backend (Supabase Storage or local disk) and record the storage path and metadata in the database.
+1. WHEN a Worker uploads a Checkpoint to the configured storage backend, THE Coordinator SHALL record the Checkpoint storage path and metadata in the database.
 2. THE Coordinator SHALL associate each stored Checkpoint with its originating Task ID, Job ID, Node ID, epoch number, and upload timestamp.
 3. WHEN a user requests the Artifacts for a completed Job, THE Coordinator SHALL return a list of Checkpoint metadata records including storage paths for all Tasks in that Job.
 4. IF a Checkpoint upload fails, THEN THE Coordinator SHALL mark the associated Task as "failed" and return a descriptive error message to the Worker.
+5. Each stored Checkpoint SHALL represent the model state for a single Task executed on a single Worker.
 
 ---
 
