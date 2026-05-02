@@ -7,13 +7,13 @@ This plan implements a distributed ML task orchestration platform with three com
 ## Tasks
 
 - [ ] 1. Project structure and core dependencies
-  - [ ] 1.1 Create Coordinator project structure and install dependencies
+  - [x] 1.1 Create Coordinator project structure and install dependencies
     - Create `coordinator/` directory with `__init__.py`, `main.py` (FastAPI app entry), `requirements.txt`
     - Dependencies: fastapi, uvicorn, supabase-py, pydantic, python-dotenv
     - Set up `.env` loading for SUPABASE_URL, SUPABASE_KEY
     - _Requirements: 1.1, 3.1_
 
-  - [ ] 1.2 Create Worker project structure and install dependencies
+  - [x] 1.2 Create Worker project structure and install dependencies
     - Create `worker/` directory with `__init__.py`, `main.py`, `requirements.txt`
     - Dependencies: torch, torchvision, httpx, pydantic, python-dotenv (no supabase-py — worker uses plain HTTP for signed URL uploads)
     - _Requirements: 5.1_
