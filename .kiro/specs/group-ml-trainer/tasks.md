@@ -344,28 +344,28 @@ This plan implements a distributed ML task orchestration platform with three com
     - This milestone proves the core loop works before adding multi-node, failure semantics, or dashboard polish
     - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.1, 5.2, 5.3, 6.1, 6.2, 7.1_
 
-- [ ] 21. Dashboard frontend
-  - [ ] 21.1 Implement system overview page (`/`)
+- [x] 21. Dashboard frontend
+  - [x] 21.1 Implement system overview page (`/`)
     - Fetch monitoring summary from `GET /api/monitoring/summary`
     - Display online node count, running job count, quick links to nodes and jobs pages
     - Use SWR with 10-second refresh interval
     - _Requirements: 11.4_
 
-  - [ ] 21.2 Implement nodes page (`/nodes`)
+  - [x] 21.2 Implement nodes page (`/nodes`)
     - Fetch node list from `GET /api/nodes`
     - Display table: node_id, hostname, GPU, RAM, CPU cores, status, last heartbeat
     - Visual status indicators: idle=green, busy=yellow, offline=red
     - Auto-refresh with SWR (10-second interval)
     - _Requirements: 9.1, 9.2, 9.3_
 
-  - [ ] 21.3 Implement jobs list page (`/jobs`)
+  - [x] 21.3 Implement jobs list page (`/jobs`)
     - Fetch job list from `GET /api/jobs`
     - Display table: job_id, job_name, status, model_type, dataset, shard_count, created_at, completed_at
     - Link each job to detail page
     - Auto-refresh with SWR
     - _Requirements: 10.1_
 
-  - [ ] 21.4 Implement job detail page (`/jobs/[id]`)
+  - [x] 21.4 Implement job detail page (`/jobs/[id]`)
     - Fetch job detail from `GET /api/jobs/{id}`
     - Display per-task progress: assigned node, status, current epoch, latest loss, accuracy
     - Display aggregated metrics on completion (mean loss, mean accuracy, per-node breakdown)
@@ -374,7 +374,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Auto-refresh with SWR (5-second interval for running jobs)
     - _Requirements: 10.2, 10.3, 10.4, 6.3, 7.3_
 
-  - [ ] 21.5 Implement job submission page (`/jobs/new`)
+  - [x] 21.5 Implement job submission page (`/jobs/new`)
     - Form with fields: job_name (optional), dataset selector (MNIST, Fashion-MNIST, synthetic), model_type (MLP), shard_count, hyperparameters (learning_rate, epochs, batch_size, hidden_layers)
     - Submit to `POST /api/jobs`
     - Display validation errors from API response
