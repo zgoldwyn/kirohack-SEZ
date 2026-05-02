@@ -191,13 +191,13 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test busy node gets no task
     - _Requirements: 4.3, 4.4, 4.5_
 
-- [ ] 12. Task lifecycle endpoints
-  - [ ] 12.1 Implement `POST /api/tasks/{id}/start` endpoint
+- [x] 12. Task lifecycle endpoints
+  - [x] 12.1 Implement `POST /api/tasks/{id}/start` endpoint
     - Authenticate request, verify task is assigned to requesting node
     - Update task status to "running", set `started_at`
     - _Requirements: 5.1_
 
-  - [ ] 12.2 Implement `POST /api/tasks/{id}/complete` endpoint
+  - [x] 12.2 Implement `POST /api/tasks/{id}/complete` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Accept `TaskCompleteRequest` with checkpoint_path and optional final metrics
     - Update task status to "completed", set `completed_at`, store `checkpoint_path`
@@ -207,7 +207,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Check if job should be marked failed (some failed, none queued/assigned/running)
     - _Requirements: 5.3, 7.1, 7.2, 6.1, 6.4_
 
-  - [ ] 12.3 Implement `POST /api/tasks/{id}/fail` endpoint
+  - [x] 12.3 Implement `POST /api/tasks/{id}/fail` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Accept `TaskFailRequest` with error_message
     - Update task status to "failed", set `error_message`, set `completed_at`
@@ -215,14 +215,14 @@ This plan implements a distributed ML task orchestration platform with three com
     - Check if job should be marked failed (no tasks queued/assigned/running remaining)
     - _Requirements: 5.4, 6.4_
 
-  - [ ] 12.4 Implement `POST /api/tasks/{id}/upload-url` endpoint
+  - [x] 12.4 Implement `POST /api/tasks/{id}/upload-url` endpoint
     - Authenticate request, verify task belongs to requesting node
     - Generate signed upload URL using `storage.py` for path `{job_id}/{task_id}/final.pt`
     - Return the signed URL
     - _Requirements: 7.1_
 
-- [ ] 13. Metrics reporting endpoint
-  - [ ] 13.1 Implement `POST /api/metrics` endpoint
+- [x] 13. Metrics reporting endpoint
+  - [x] 13.1 Implement `POST /api/metrics` endpoint
     - Authenticate request
     - Accept `MetricsReportRequest` with task_id, epoch, loss, accuracy
     - Insert record into metrics table with job_id, task_id, node_id, epoch, loss, accuracy
