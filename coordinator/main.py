@@ -5,6 +5,8 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
+from coordinator.dashboard import router as dashboard_router
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -20,6 +22,9 @@ app = FastAPI(
     description="Distributed ML task orchestration platform coordinator service.",
     version="0.1.0",
 )
+
+# Dashboard read endpoints (unauthenticated, local/demo only)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

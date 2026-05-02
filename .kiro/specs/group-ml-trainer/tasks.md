@@ -248,8 +248,8 @@ This plan implements a distributed ML task orchestration platform with three com
 - [ ] 15. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Dashboard read endpoints and monitoring
-  - [ ] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
+- [x] 16. Dashboard read endpoints and monitoring
+  - [x] 16.1 Implement Dashboard-facing read endpoints (unauthenticated, local/demo only)
     - `GET /api/nodes` — List all nodes with status, hardware info, last heartbeat
     - `GET /api/jobs` — List all jobs with status, model type, dataset, shard count, timestamps
     - `GET /api/jobs/{id}` — Job detail with tasks, per-task status, aggregated metrics
@@ -257,7 +257,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - `GET /api/jobs/{id}/artifacts` — List artifacts for a job
     - _Requirements: 2.4, 6.3, 7.3, 9.1, 10.1_
 
-  - [ ] 16.2 Implement `GET /api/monitoring/summary` endpoint
+  - [x] 16.2 Implement `GET /api/monitoring/summary` endpoint
     - Return counts: online nodes, idle nodes, busy nodes, offline nodes, queued jobs, running jobs, completed jobs, failed jobs
     - _Requirements: 11.2_
 
