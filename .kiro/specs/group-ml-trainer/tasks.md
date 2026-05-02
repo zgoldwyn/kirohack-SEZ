@@ -6,7 +6,7 @@ This plan implements a distributed ML task orchestration platform with three com
 
 ## Tasks
 
-- [ ] 1. Project structure and core dependencies
+- [x] 1. Project structure and core dependencies
   - [x] 1.1 Create Coordinator project structure and install dependencies
     - Create `coordinator/` directory with `__init__.py`, `main.py` (FastAPI app entry), `requirements.txt`
     - Dependencies: fastapi, uvicorn, supabase-py, pydantic, python-dotenv
@@ -40,7 +40,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Document required environment setup in a `README.md` or `SETUP.md`
     - _Requirements: 1.1, 3.1_
 
-- [ ] 2. Database client and storage integration
+- [x] 2. Database client and storage integration
   - [x] 2.1 Implement `coordinator/db.py` — Supabase client initialization and query helpers
     - Initialize Supabase client from environment variables
     - Create helper functions for common queries: insert, select, update with filters
@@ -53,7 +53,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Workers do not hold direct Supabase credentials; they use signed URLs
     - _Requirements: 7.1, 7.2_
 
-- [ ] 3. Pydantic models for API layer
+- [x] 3. Pydantic models for API layer
   - [x] 3.1 Implement `coordinator/models.py` — Request and response models
     - Define `NodeRegistrationRequest`, `NodeRegistrationResponse`
     - Define `JobSubmissionRequest`, `JobSubmissionResponse`
@@ -64,7 +64,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Use status enums/constants from `coordinator/constants.py` throughout
     - _Requirements: 1.1, 1.3, 3.1, 3.4, 12.1_
 
-- [ ] 4. Configuration parsing and validation
+- [x] 4. Configuration parsing and validation
   - [x] 4.1 Implement `coordinator/config_parser.py` — Job config parsing and task config generation
     - Parse `JobSubmissionRequest` into structured `JobConfig` object
     - Validate dataset_name against supported set {MNIST, Fashion-MNIST, synthetic}
@@ -80,7 +80,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Property 14: Config validation reports invalid field types and out-of-range values**
     - **Validates: Requirements 3.2, 3.4, 12.2, 12.3, 12.4**
 
-- [ ] 5. Auth module
+- [x] 5. Auth module
   - [x] 5.1 Implement `coordinator/auth.py` — Token generation, hashing, and FastAPI dependency
     - Token generation using `secrets.token_urlsafe(32)`
     - SHA-256 hashing for storage
@@ -156,8 +156,8 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test shard_count > idle nodes returns 400
     - _Requirements: 3.1, 3.2, 3.3_
 
-- [ ] 10. Task creation (scheduler)
-  - [ ] 10.1 Implement task creation in `coordinator/scheduler.py`
+- [x] 10. Task creation (scheduler)
+  - [x] 10.1 Implement task creation in `coordinator/scheduler.py`
     - Given a job with shard_count N, create N task records with status "queued"
     - Each task gets a unique `shard_index` from {0, 1, ..., N-1}
     - Each task's `task_config` is generated from `config_parser.py` with the appropriate shard_index
@@ -168,8 +168,8 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Property 6: Task creation produces correct count and shard indices**
     - **Validates: Requirements 4.1**
 
-- [ ] 11. Task polling and assignment (pull-based)
-  - [ ] 11.1 Implement `GET /api/tasks/poll` endpoint in `coordinator/scheduler.py`
+- [x] 11. Task polling and assignment (pull-based)
+  - [x] 11.1 Implement `GET /api/tasks/poll` endpoint in `coordinator/scheduler.py`
     - Authenticate request using auth dependency
     - Check if polling node is idle (not already busy)
     - Select one eligible queued task: node's `ram_mb` >= task's minimum RAM requirement; if task requires GPU, node must have non-null `gpu_model`
@@ -228,8 +228,8 @@ This plan implements a distributed ML task orchestration platform with three com
     - Insert record into metrics table with job_id, task_id, node_id, epoch, loss, accuracy
     - _Requirements: 5.2_
 
-- [ ] 14. Result aggregation
-  - [ ] 14.1 Implement `coordinator/aggregator.py` — Metrics aggregation logic
+- [x] 14. Result aggregation
+  - [x] 14.1 Implement `coordinator/aggregator.py` — Metrics aggregation logic
     - When all tasks in a job are completed, compute aggregated metrics
     - Use per-epoch metrics from the metrics table as source of truth (not TaskCompleteRequest final metrics)
     - For each task, the final epoch metric is the metric row with the largest reported `epoch` number for that task in the metrics table
@@ -245,7 +245,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Property 9: Job failure detection based on task statuses**
     - **Validates: Requirements 6.1, 6.2, 6.4**
 
-- [ ] 15. Checkpoint — Ensure all tests pass
+- [x] 15. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 16. Dashboard read endpoints and monitoring
@@ -265,14 +265,14 @@ This plan implements a distributed ML task orchestration platform with three com
     - **Property 12: Monitoring summary returns correct counts**
     - **Validates: Requirements 11.2**
 
-- [ ] 17. Logging
-  - [ ] 17.1 Implement structured logging across Coordinator
+- [x] 17. Logging
+  - [x] 17.1 Implement structured logging across Coordinator
     - Configure Python `logging` with structured format (timestamp, level, event type)
     - Log node registration events, job submission events, task assignment events
     - Log task completion and failure events with task_id, node_id, job_id, error_message
     - _Requirements: 11.1, 11.3_
 
-- [ ] 18. Worker client implementation
+- [x] 18. Worker client implementation
   - [x] 18.1 Implement `worker/config.py` — Task configuration parsing
     - Parse `TaskConfig` JSON received from Coordinator into local training parameters
     - Extract dataset_name, model_type, hyperparameters, shard_index, shard_count
@@ -328,11 +328,11 @@ This plan implements a distributed ML task orchestration platform with three com
     - After task completes or fails, return to polling
     - _Requirements: 1.1, 2.1, 4.3, 5.1_
 
-- [ ] 19. Checkpoint — Ensure all tests pass
+- [x] 19. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 20. Milestone A: Single-worker end-to-end validation
-  - [ ] 20.1 Run single-worker end-to-end flow manually
+- [x] 20. Milestone A: Single-worker end-to-end validation
+  - [x] 20.1 Run single-worker end-to-end flow manually
     - Start Coordinator locally
     - Start one Worker pointing at the local Coordinator
     - Worker registers, begins heartbeat
@@ -388,7 +388,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Test monitoring summary displays counts
     - _Requirements: 9.1, 9.3, 10.1, 10.2, 10.3, 11.4_
 
-- [ ] 22. Integration tests
+- [x] 22. Integration tests
   - [ ]* 22.1 Write integration test: Full job lifecycle
     - Register nodes → submit job → tasks created and assigned → workers poll → report metrics → upload checkpoints → job completes with aggregated results
     - _Requirements: 1.1, 3.1, 4.1, 4.2, 5.2, 5.3, 6.1, 6.2_
@@ -409,7 +409,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Register node → assign task → start task → stop heartbeat → node marked offline → task marked failed with "node went offline" error → job failure semantics verified
     - _Requirements: 2.2, 6.4_
 
-- [ ] 23. Final checkpoint — Ensure all tests pass
+- [x] 23. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

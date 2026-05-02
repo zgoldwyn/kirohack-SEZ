@@ -1,8 +1,11 @@
-"""Supabase client initialization and database query helpers.
+"""Supabase PostgREST client via httpx.
 
-Provides a singleton Supabase client and thin helper functions for
-common database operations (insert, select, update with filters).
-Wraps Supabase errors into consistent application exceptions.
+Uses httpx to call the Supabase PostgREST API directly, bypassing
+supabase-py's JWT key format validation (which rejects the newer
+sb_secret_ / sb_publishable_ key formats).
+
+Provides the same interface as before: insert, select, select_one,
+update — so all callers continue to work without modification.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import logging
 import os
 from typing import Any
 
-from supabase import Client, create_client
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +32,46 @@ class RecordNotFoundError(DatabaseError):
 
 
 # ---------------------------------------------------------------------------
-# Singleton client
+# HTTP client
 # ---------------------------------------------------------------------------
 
-_client: Client | None = None
+_http_client: httpx.Client | None = None
 
 
-def get_client() -> Client:
-    """Return the singleton Supabase client, creating it on first call."""
-    global _client
-    if _client is None:
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_SERVICE_KEY")
-        if not url or not key:
-            raise RuntimeError(
-                "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set"
-            )
-        _client = create_client(url, key)
-    return _client
+def _get_base_url() -> str:
+    url = os.getenv("SUPABASE_URL")
+    if not url:
+        raise RuntimeError("SUPABASE_URL environment variable is not set")
+    return url.rstrip("/")
+
+
+def _get_key() -> str:
+    key = os.getenv("SUPABASE_KEY")
+    if not key:
+        raise RuntimeError("SUPABASE_KEY environment variable is not set")
+    return key
+
+
+def _get_http_client() -> httpx.Client:
+    """Return a singleton httpx client with auth headers pre-configured."""
+    global _http_client
+    if _http_client is None:
+        key = _get_key()
+        _http_client = httpx.Client(
+            base_url=f"{_get_base_url()}/rest/v1",
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            timeout=15.0,
+        )
+    return _http_client
+
+
+def get_client():
+    """Backward-compat shim for storage.py. Returns the httpx client."""
+    return _get_http_client()
 
 
 # ---------------------------------------------------------------------------
@@ -60,12 +85,22 @@ def insert(table: str, data: dict[str, Any]) -> dict[str, Any]:
     Raises DatabaseError on failure.
     """
     try:
-        response = get_client().table(table).insert(data).execute()
-        if response.data:
-            return response.data[0]
+        resp = _get_http_client().post(
+            f"/{table}",
+            json=data,
+            headers={"Prefer": "return=representation"},
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows:
+            return rows[0]
         raise DatabaseError(f"Insert into '{table}' returned no data")
     except DatabaseError:
         raise
+    except httpx.HTTPStatusError as exc:
+        raise DatabaseError(
+            f"Insert into '{table}' failed: {exc.response.status_code} {exc.response.text}"
+        ) from exc
     except Exception as exc:
         raise DatabaseError(f"Insert into '{table}' failed: {exc}") from exc
 
@@ -80,12 +115,17 @@ def select(
     Returns a (possibly empty) list of matching records.
     """
     try:
-        query = get_client().table(table).select(columns)
+        params: dict[str, str] = {"select": columns}
         if filters:
             for col, val in filters.items():
-                query = query.eq(col, val)
-        response = query.execute()
-        return response.data or []
+                params[col] = f"eq.{val}"
+        resp = _get_http_client().get(f"/{table}", params=params)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise DatabaseError(
+            f"Select from '{table}' failed: {exc.response.status_code} {exc.response.text}"
+        ) from exc
     except Exception as exc:
         raise DatabaseError(f"Select from '{table}' failed: {exc}") from exc
 
@@ -114,10 +154,39 @@ def update(
     Returns the list of updated records.
     """
     try:
-        query = get_client().table(table).update(data)
+        params: dict[str, str] = {}
         for col, val in filters.items():
-            query = query.eq(col, val)
-        response = query.execute()
-        return response.data or []
+            params[col] = f"eq.{val}"
+        resp = _get_http_client().patch(
+            f"/{table}",
+            json=data,
+            params=params,
+            headers={"Prefer": "return=representation"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise DatabaseError(
+            f"Update on '{table}' failed: {exc.response.status_code} {exc.response.text}"
+        ) from exc
     except Exception as exc:
         raise DatabaseError(f"Update on '{table}' failed: {exc}") from exc
+
+
+def delete(
+    table: str,
+    filters: dict[str, Any],
+) -> None:
+    """Delete rows matching the given equality filters."""
+    try:
+        params: dict[str, str] = {}
+        for col, val in filters.items():
+            params[col] = f"eq.{val}"
+        resp = _get_http_client().delete(f"/{table}", params=params)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise DatabaseError(
+            f"Delete from '{table}' failed: {exc.response.status_code} {exc.response.text}"
+        ) from exc
+    except Exception as exc:
+        raise DatabaseError(f"Delete from '{table}' failed: {exc}") from exc

@@ -24,22 +24,28 @@ from coordinator.models import (
     TaskFailRequest,
 )
 from coordinator.heartbeat import heartbeat_monitor
-from coordinator.scheduler import create_tasks_for_job
+from coordinator.models import TaskPollResponse
+from coordinator.scheduler import create_tasks_for_job, poll_task
 from coordinator.storage import generate_signed_upload_url
 
 from coordinator.dashboard import router as dashboard_router
 
+from coordinator.logging_config import setup_logging
+
 load_dotenv()
+
+# Configure structured logging before anything else logs.
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL:
     raise RuntimeError("SUPABASE_URL environment variable is not set")
 if not SUPABASE_KEY:
-    raise RuntimeError("SUPABASE_SERVICE_KEY environment variable is not set")
+    raise RuntimeError("SUPABASE_KEY environment variable is not set")
 
 
 @asynccontextmanager
@@ -124,6 +130,13 @@ async def register_node(body: NodeRegistrationRequest):
             detail="Database unavailable",
         ) from exc
 
+    logger.info(
+        "event=node_registered | node_id=%s | node_db_id=%s | hostname=%s | status=idle",
+        body.node_id,
+        record["id"],
+        body.hostname,
+    )
+
     return NodeRegistrationResponse(
         node_db_id=record["id"],
         auth_token=token,
@@ -149,6 +162,11 @@ async def node_heartbeat(node: dict = Depends(get_current_node)):
 
     if node.get("status") == NodeStatus.OFFLINE.value:
         update_data["status"] = NodeStatus.IDLE.value
+        logger.info(
+            "event=node_recovered | node_id=%s | node_db_id=%s | previous_status=offline | new_status=idle",
+            node.get("node_id"),
+            node["id"],
+        )
 
     try:
         db.update("nodes", update_data, filters={"id": node["id"]})
@@ -236,7 +254,35 @@ async def submit_job(body: JobSubmissionRequest):
             detail="Database unavailable",
         ) from exc
 
+    logger.info(
+        "event=job_submitted | job_id=%s | dataset=%s | model_type=%s | shard_count=%d",
+        job_id,
+        body.dataset_name,
+        body.model_type,
+        body.shard_count,
+    )
+
     return JobSubmissionResponse(job_id=job_id)
+
+
+# ---------------------------------------------------------------------------
+# 11.1  GET /api/tasks/poll
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/tasks/poll", response_model=TaskPollResponse)
+async def poll_for_task(node: dict = Depends(get_current_node)):
+    """Worker polls for an eligible queued task.
+
+    - Authenticate request using auth dependency
+    - Check if polling node is idle (not already busy)
+    - Select one eligible queued task based on resource requirements
+    - Assign task to polling node, update statuses
+    - If first task assigned for the job, set job to "running"
+    - Return TaskPollResponse with task config, or empty response
+    Requirements: 4.2, 4.3, 4.4, 4.5
+    """
+    return poll_task(node)
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +341,14 @@ async def start_task(
         "tasks",
         {"status": TaskStatus.RUNNING.value, "started_at": now},
         filters={"id": task_id},
+    )
+
+    logger.info(
+        "event=task_started | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s",
+        task_id,
+        task.get("job_id"),
+        node.get("node_id"),
+        node["id"],
     )
 
     return {"status": "ok"}
@@ -368,6 +422,15 @@ async def complete_task(
         # Some tasks may have failed; check if job should be marked failed
         check_job_failure(job_id)
 
+    logger.info(
+        "event=task_completed | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s | checkpoint_path=%s",
+        task_id,
+        job_id,
+        node.get("node_id"),
+        node_id,
+        body.checkpoint_path,
+    )
+
     return {"status": "ok"}
 
 
@@ -417,6 +480,15 @@ async def fail_task(
     # Check if job should be marked failed
     check_job_failure(job_id)
 
+    logger.info(
+        "event=task_failed | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s | error_message=%s",
+        task_id,
+        job_id,
+        node.get("node_id"),
+        node_id,
+        body.error_message,
+    )
+
     return {"status": "ok"}
 
 
@@ -442,7 +514,7 @@ async def request_upload_url(
     job_id = task["job_id"]
 
     try:
-        signed_url = generate_signed_upload_url(job_id, task_id)
+        result = generate_signed_upload_url(job_id, task_id)
     except Exception as exc:
         logger.error("Failed to generate signed upload URL: %s", exc)
         raise HTTPException(
@@ -450,7 +522,11 @@ async def request_upload_url(
             detail="Failed to generate signed upload URL",
         ) from exc
 
-    return {"signed_url": signed_url}
+    # generate_signed_upload_url returns a dict with "signed_url", "token", "path"
+    # Extract just the URL string for the worker
+    if isinstance(result, dict):
+        return {"signed_url": result.get("signed_url", result)}
+    return {"signed_url": result}
 
 
 # ---------------------------------------------------------------------------

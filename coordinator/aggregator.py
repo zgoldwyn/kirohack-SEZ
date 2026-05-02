@@ -36,7 +36,7 @@ def aggregate_job_metrics(job_id: str) -> None:
     # Fetch all completed tasks for this job
     tasks = db.select("tasks", filters={"job_id": job_id, "status": TaskStatus.COMPLETED.value})
     if not tasks:
-        logger.warning("aggregate_job_metrics called but no completed tasks for job %s", job_id)
+        logger.warning("event=aggregation_skipped | job_id=%s | reason=no_completed_tasks", job_id)
         return
 
     per_node_breakdown: list[dict[str, Any]] = []
@@ -97,7 +97,13 @@ def aggregate_job_metrics(job_id: str) -> None:
         },
         filters={"id": job_id},
     )
-    logger.info("Job %s completed with aggregated metrics", job_id)
+    logger.info(
+        "event=job_completed | job_id=%s | mean_loss=%s | mean_accuracy=%s | task_count=%d",
+        job_id,
+        aggregated.get("mean_loss"),
+        aggregated.get("mean_accuracy"),
+        len(tasks),
+    )
 
 
 def check_job_failure(job_id: str) -> None:
@@ -142,4 +148,8 @@ def check_job_failure(job_id: str) -> None:
             },
             filters={"id": job_id},
         )
-        logger.info("Job %s marked as failed", job_id)
+        logger.info(
+            "event=job_failed | job_id=%s | failed_task_count=%d",
+            job_id,
+            len(error_details),
+        )
