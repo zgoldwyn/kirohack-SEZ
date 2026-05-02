@@ -18,7 +18,7 @@ This plan implements a distributed ML task orchestration platform with three com
     - Dependencies: torch, torchvision, httpx, pydantic, python-dotenv (no supabase-py — worker uses plain HTTP for signed URL uploads)
     - _Requirements: 5.1_
 
-  - [ ] 1.3 Create Dashboard project structure
+  - [x] 1.3 Create Dashboard project structure
     - Initialize Next.js app in `dashboard/` with TypeScript, Tailwind CSS
     - Install SWR for data fetching
     - _Requirements: 9.1, 10.1_
