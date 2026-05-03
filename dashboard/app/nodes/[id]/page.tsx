@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use } from "react";
 import { fetcher, formatDate, formatRam, deleteRequest } from "@/lib/api";
-import type { Node } from "@/lib/types";
+import type { Node, TaskStatus } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
 
@@ -15,7 +15,7 @@ interface NodeTask {
   job_id: string;
   job_name: string | null;
   shard_index: number;
-  status: string;
+  status: TaskStatus;
   checkpoint_path: string | null;
   error_message: string | null;
   assigned_at: string | null;
