@@ -35,6 +35,7 @@ class TaskConfig(BaseModel):
     hyperparameters: HyperParameters
     shard_index: int
     shard_count: int = Field(gt=0)
+    total_rounds: int = Field(gt=0)
 
 
 def parse_task_config(raw: dict | str | bytes) -> TaskConfig:

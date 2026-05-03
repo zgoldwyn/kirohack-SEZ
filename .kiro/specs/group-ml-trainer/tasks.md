@@ -571,8 +571,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - On task start, ensure the initial `training_rounds` record exists for round 0 (idempotent)
     - _Requirements: 5.1_
 
-- [ ] 37. New API endpoints for gradient exchange
-  - [ ] 37.1 Implement `GET /api/jobs/{id}/parameters` — Binary parameter download
+- [x] 37. New API endpoints for gradient exchange
+  - [x] 37.1 Implement `GET /api/jobs/{id}/parameters` — Binary parameter download
     - Authenticate request using auth dependency
     - Verify the requesting node has an active task for this job
     - Fetch current Global_Model parameters via `param_server.get_parameters(job_id)`
@@ -581,7 +581,7 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - If job status is "completed" or "failed", return appropriate status so Worker can exit training loop
     - _Requirements: 4.4, 5.4, 13.1_
 
-  - [ ] 37.2 Implement `POST /api/jobs/{id}/gradients` — Gradient submission
+  - [x] 37.2 Implement `POST /api/jobs/{id}/gradients` — Gradient submission
     - Authenticate request using auth dependency
     - Verify the requesting node has an active task for this job
     - Parse `GradientSubmissionRequest` metadata (round_number, task_id, local_loss, local_accuracy)
@@ -600,19 +600,19 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify submissions with wrong round_number are rejected, correct round_number accepted
     - **Validates: Requirements 13.3**
 
-- [ ] 38. Remove deprecated endpoints
-  - [ ] 38.1 Remove `POST /api/tasks/{id}/complete` and `POST /api/tasks/{id}/upload-url` from `coordinator/main.py`
+- [x] 38. Remove deprecated endpoints
+  - [x] 38.1 Remove `POST /api/tasks/{id}/complete` and `POST /api/tasks/{id}/upload-url` from `coordinator/main.py`
     - Remove the `complete_task` endpoint handler and its `TaskCompleteRequest` import
     - Remove the `request_upload_url` endpoint handler and its `generate_signed_upload_url` import
     - Remove the `POST /api/metrics` endpoint (metrics now submitted inline with gradients)
     - These endpoints are replaced by the gradient submission flow
     - _Requirements: 5.3, 13.2_
 
-- [ ] 39. Checkpoint — Ensure all tests pass
+- [x] 39. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 40. Dashboard endpoints update for round progress
-  - [ ] 40.1 Update `coordinator/dashboard.py` for collaborative training data
+- [x] 40. Dashboard endpoints update for round progress
+  - [x] 40.1 Update `coordinator/dashboard.py` for collaborative training data
     - Update `GET /api/jobs` to include `current_round`, `total_rounds` in job list response
     - Update `GET /api/jobs/{id}` to include:
       - Training round progress: `current_round`, `total_rounds`
@@ -627,14 +627,14 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify counts match actual node/job statuses, and current_round included for running jobs
     - **Validates: Requirements 11.2**
 
-- [ ] 41. Worker config update
-  - [ ] 41.1 Update `worker/config.py` to include `total_rounds`
+- [x] 41. Worker config update
+  - [x] 41.1 Update `worker/config.py` to include `total_rounds`
     - Add `total_rounds` field to `TaskConfig` model (int, gt=0)
     - Update `parse_task_config` to handle the new field
     - _Requirements: 5.1_
 
-- [ ] 42. Worker reporter update for gradient exchange
-  - [ ] 42.1 Update `worker/reporter.py` with new gradient exchange methods
+- [x] 42. Worker reporter update for gradient exchange
+  - [x] 42.1 Update `worker/reporter.py` with new gradient exchange methods
     - Add `download_parameters(job_id) -> tuple[bytes, dict]`: GET `/api/jobs/{id}/parameters`, return binary payload and metadata (current_round, job_status)
     - Add `submit_gradients(job_id, round_number, task_id, gradient_bytes, local_loss, local_accuracy)`: POST `/api/jobs/{id}/gradients` with binary gradient payload and metadata
     - Remove `request_upload_url()` method (Workers no longer upload checkpoints)

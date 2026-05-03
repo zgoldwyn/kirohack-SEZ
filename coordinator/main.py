@@ -7,25 +7,28 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from coordinator import db
-from coordinator.aggregator import check_job_failure
+from coordinator.aggregator import aggregate_round, check_job_failure, complete_job
 from coordinator.auth import generate_token, get_current_node, hash_token
-from coordinator.barrier import create_round, get_active_workers
+from coordinator.barrier import check_barrier, create_round, get_active_workers, record_submission
 from coordinator.constants import JobStatus, NodeStatus, TaskStatus
 from coordinator.config_parser import ConfigValidationError, parse_job_config
 from coordinator.models import (
+    GradientSubmissionRequest,
     JobSubmissionRequest,
     JobSubmissionResponse,
     NodeRegistrationRequest,
     NodeRegistrationResponse,
+    ParameterDownloadResponse,
     TaskFailRequest,
 )
 from coordinator.heartbeat import heartbeat_monitor
 from coordinator.models import TaskPollResponse
-from coordinator.param_server import ParamServerError, initialize_model
+from coordinator.param_server import ParamServerError, get_parameters, initialize_model
 from coordinator.scheduler import create_tasks_for_job, poll_task
+from coordinator.storage import GRADIENTS_BUCKET, upload_blob
 
 from coordinator.dashboard import router as dashboard_router
 
@@ -481,5 +484,325 @@ async def fail_task(
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# 37.1  GET /api/jobs/{id}/parameters — Binary parameter download
+# ---------------------------------------------------------------------------
 
 
+def _get_active_task_for_node_in_job(job_id: str, node_id: str) -> dict:
+    """Return the active task for *node_id* in *job_id*, or raise 403.
+
+    A task is considered active if its status is ``assigned`` or
+    ``running``.
+    """
+    tasks = db.select("tasks", filters={"job_id": job_id, "node_id": node_id})
+    active_statuses = {TaskStatus.ASSIGNED.value, TaskStatus.RUNNING.value}
+    for task in tasks:
+        if task.get("status") in active_statuses:
+            return task
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="No active task for this node in the requested job",
+    )
+
+
+@app.get("/api/jobs/{job_id}/parameters")
+async def download_parameters(
+    job_id: str,
+    node: dict = Depends(get_current_node),
+):
+    """Download the current Global_Model parameters for a job.
+
+    - Authenticate request using auth dependency
+    - Verify the requesting node has an active task for this job
+    - Fetch current Global_Model parameters via param_server
+    - Return binary payload with Content-Type: application/octet-stream
+    - Include ParameterDownloadResponse metadata in custom response headers
+    - If job status is "completed" or "failed", return status so Worker
+      can exit training loop
+    Requirements: 4.4, 5.4, 13.1
+    """
+    # Verify node has an active task for this job
+    _get_active_task_for_node_in_job(job_id, node["id"])
+
+    # Fetch job record for metadata
+    job_rows = db.select("jobs", filters={"id": job_id})
+    if not job_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    job = job_rows[0]
+
+    job_status = job.get("status", "")
+    current_round = job.get("current_round", 0) or 0
+
+    # Build metadata
+    meta = ParameterDownloadResponse(
+        job_id=job_id,
+        current_round=current_round,
+        job_status=job_status,
+    )
+
+    # If job is completed or failed, return metadata-only response so
+    # the Worker knows to stop the training loop.
+    if job_status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
+        return Response(
+            content=b"",
+            media_type="application/octet-stream",
+            headers={
+                "X-Job-Id": meta.job_id,
+                "X-Current-Round": str(meta.current_round),
+                "X-Job-Status": meta.job_status,
+            },
+        )
+
+    # Download parameters
+    try:
+        param_bytes = get_parameters(job_id)
+    except ParamServerError as exc:
+        logger.error(
+            "Failed to download parameters for job %s: %s", job_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to retrieve model parameters",
+        ) from exc
+
+    logger.debug(
+        "event=parameters_downloaded | job_id=%s | node_db_id=%s | round=%d | bytes=%d",
+        job_id,
+        node["id"],
+        current_round,
+        len(param_bytes),
+    )
+
+    return Response(
+        content=param_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "X-Job-Id": meta.job_id,
+            "X-Current-Round": str(meta.current_round),
+            "X-Job-Status": meta.job_status,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# 37.2  POST /api/jobs/{id}/gradients — Gradient submission
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/jobs/{job_id}/gradients")
+async def submit_gradients(
+    job_id: str,
+    request: Request,
+    node: dict = Depends(get_current_node),
+):
+    """Submit gradient update for the current training round.
+
+    The request body is the raw binary gradient payload (application/octet-stream).
+    Metadata is passed via query parameters: round_number, task_id,
+    local_loss, local_accuracy.
+
+    - Authenticate request using auth dependency
+    - Verify the requesting node has an active task for this job
+    - Validate round_number matches job's current_round (409 if mismatch)
+    - Validate worker hasn't already submitted for this round (409 if dup)
+    - Store gradient binary payload to Supabase Storage
+    - Record submission via barrier.record_submission()
+    - Store per-worker metrics in metrics table
+    - Update task's last_submitted_round
+    - Check barrier — if met, trigger aggregation
+    Requirements: 5.1, 5.2, 5.3, 5.6, 13.2, 13.3
+    """
+    node_id = node["id"]
+
+    # Parse metadata from query parameters
+    params = request.query_params
+    try:
+        round_number = int(params["round_number"])
+        task_id = str(params["task_id"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Missing or invalid required query parameters: round_number, task_id",
+        ) from exc
+
+    local_loss_raw = params.get("local_loss")
+    local_accuracy_raw = params.get("local_accuracy")
+    local_loss = float(local_loss_raw) if local_loss_raw is not None else None
+    local_accuracy = float(local_accuracy_raw) if local_accuracy_raw is not None else None
+
+    # Verify node has an active task for this job
+    active_task = _get_active_task_for_node_in_job(job_id, node_id)
+
+    # Verify the task_id matches the node's active task
+    if active_task["id"] != task_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="task_id does not match the active task for this node",
+        )
+
+    # Fetch job record
+    job_rows = db.select("jobs", filters={"id": job_id})
+    if not job_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    job = job_rows[0]
+
+    # Validate round_number matches job's current_round
+    current_round = job.get("current_round", 0) or 0
+    if round_number != current_round:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Round number mismatch: submitted round_number={round_number}, "
+                f"job current_round={current_round}"
+            ),
+        )
+
+    # Check for duplicate submission
+    existing_submissions = db.select(
+        "gradient_submissions",
+        filters={
+            "job_id": job_id,
+            "task_id": task_id,
+            "round_number": round_number,
+        },
+    )
+    if existing_submissions:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Worker already submitted gradients for round {round_number}",
+        )
+
+    # Read binary gradient payload from request body
+    gradient_data = await request.body()
+    if not gradient_data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Empty gradient payload",
+        )
+
+    # Store gradient to Supabase Storage
+    gradient_path = f"{job_id}/round_{round_number}/node_{node_id}.pt"
+    try:
+        upload_blob(GRADIENTS_BUCKET, gradient_path, gradient_data)
+    except Exception as exc:
+        logger.error(
+            "Failed to upload gradient for job %s round %d node %s: %s",
+            job_id,
+            round_number,
+            node_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to store gradient payload",
+        ) from exc
+
+    # Record submission via barrier (inserts gradient_submissions row and
+    # increments submitted_count on training_rounds)
+    try:
+        submission = record_submission(
+            job_id=job_id,
+            round_number=round_number,
+            task_id=task_id,
+            node_id=node_id,
+        )
+        # Update the gradient_path on the submission record
+        db.update(
+            "gradient_submissions",
+            {
+                "gradient_path": gradient_path,
+                "local_loss": local_loss,
+                "local_accuracy": local_accuracy,
+            },
+            filters={"id": submission["id"]},
+        )
+    except db.DatabaseError as exc:
+        logger.error(
+            "Failed to record gradient submission for job %s round %d: %s",
+            job_id,
+            round_number,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to record gradient submission",
+        ) from exc
+
+    # Store per-worker metrics
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        db.insert(
+            "metrics",
+            {
+                "job_id": job_id,
+                "task_id": task_id,
+                "node_id": node_id,
+                "round_number": round_number,
+                "metric_type": "worker_local",
+                "loss": local_loss,
+                "accuracy": local_accuracy,
+                "created_at": now,
+            },
+        )
+    except db.DatabaseError:
+        logger.exception(
+            "event=worker_metric_insert_failed | job_id=%s | round=%d | task_id=%s",
+            job_id,
+            round_number,
+            task_id,
+        )
+
+    # Update task's last_submitted_round
+    try:
+        db.update(
+            "tasks",
+            {"last_submitted_round": round_number},
+            filters={"id": task_id},
+        )
+    except db.DatabaseError:
+        logger.exception(
+            "event=task_round_update_failed | job_id=%s | task_id=%s | round=%d",
+            job_id,
+            task_id,
+            round_number,
+        )
+
+    # Check if barrier is met — if so, trigger aggregation
+    barrier_met = check_barrier(job_id, round_number)
+
+    if barrier_met:
+        logger.info(
+            "event=barrier_met | job_id=%s | round=%d — triggering aggregation",
+            job_id,
+            round_number,
+        )
+        try:
+            aggregate_round(job_id, round_number)
+        except Exception:
+            logger.exception(
+                "event=aggregation_failed | job_id=%s | round=%d",
+                job_id,
+                round_number,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Gradient aggregation failed",
+            )
+
+    logger.info(
+        "event=gradient_submitted | job_id=%s | round=%d | task_id=%s | node_db_id=%s | barrier_met=%s",
+        job_id,
+        round_number,
+        task_id,
+        node_id,
+        barrier_met,
+    )
+
+    return {"status": "ok", "barrier_met": barrier_met}
