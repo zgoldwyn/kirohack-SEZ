@@ -71,6 +71,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — allow the Netlify frontend and local dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://kirohacks.netlify.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Dashboard read endpoints (unauthenticated, local/demo only)
 app.include_router(dashboard_router)
 
@@ -193,11 +205,10 @@ async def submit_job(body: JobSubmissionRequest):
 
     - Validate request body (Pydantic handles required fields / types)
     - Validate dataset_name and model_type via config_parser
-    - Count idle nodes; reject if shard_count > idle_node_count (HTTP 400)
     - Create job record with status "queued"
     - Trigger task creation via scheduler
+    - Tasks remain queued until workers poll and pick them up
     - Return job_id
-    Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
     """
     # Validate dataset and model type, build structured config
     try:

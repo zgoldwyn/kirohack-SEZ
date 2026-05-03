@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from coordinator.db import DatabaseError, RecordNotFoundError, select, select_one
+from coordinator.db import DatabaseError, RecordNotFoundError, delete, select, select_one
 
 router = APIRouter()
 
@@ -63,6 +63,59 @@ async def list_nodes() -> list[dict[str, Any]]:
         raise _db_error_to_http(exc) from exc
 
     return nodes
+
+
+# ---------------------------------------------------------------------------
+# Node detail endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/nodes/{node_id}", summary="Get node detail with task history")
+async def get_node(node_id: str) -> dict[str, Any]:
+    """Return node detail including hardware info and tasks assigned to this node."""
+    try:
+        node = select_one(
+            "nodes",
+            columns=(
+                "id, node_id, hostname, cpu_cores, gpu_model, vram_mb, "
+                "ram_mb, disk_mb, os, python_version, pytorch_version, "
+                "status, last_heartbeat, created_at"
+            ),
+            filters={"id": node_id},
+        )
+    except RecordNotFoundError:
+        raise HTTPException(status_code=404, detail={"error": "Not Found"})
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    # Fetch tasks assigned to this node
+    try:
+        tasks = select(
+            "tasks",
+            columns=(
+                "id, job_id, shard_index, status, checkpoint_path, "
+                "error_message, assigned_at, started_at, completed_at"
+            ),
+            filters={"node_id": node_id},
+        )
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    # Enrich tasks with job name
+    job_ids = list({t["job_id"] for t in tasks if t.get("job_id")})
+    job_names: dict[str, str | None] = {}
+    for jid in job_ids:
+        try:
+            job = select_one("jobs", columns="id, job_name", filters={"id": jid})
+            job_names[jid] = job.get("job_name")
+        except (RecordNotFoundError, DatabaseError):
+            job_names[jid] = None
+
+    enriched_tasks = [
+        {**t, "job_name": job_names.get(t["job_id"])} for t in tasks
+    ]
+
+    return {**node, "tasks": enriched_tasks}
 
 
 # ---------------------------------------------------------------------------
@@ -407,3 +460,73 @@ async def monitoring_summary() -> dict[str, Any]:
         },
         "running_jobs": running_jobs,
     }
+
+
+# ---------------------------------------------------------------------------
+# Delete job endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/api/jobs/{job_id}", summary="Delete a job and its related data")
+async def delete_job(job_id: str) -> dict[str, str]:
+    """Delete a job and cascade-delete its tasks, metrics, and artifacts.
+
+    Only completed or failed jobs can be deleted. Returns 409 if the job
+    is still queued or running.
+    """
+    try:
+        job = select_one("jobs", columns="id, status", filters={"id": job_id})
+    except RecordNotFoundError:
+        raise HTTPException(status_code=404, detail={"error": "Not Found"})
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    if job["status"] in ("queued", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Cannot delete a job that is queued or running"},
+        )
+
+    # Cascade delete: metrics → artifacts → tasks → job
+    try:
+        delete("metrics", filters={"job_id": job_id})
+        delete("artifacts", filters={"job_id": job_id})
+        delete("tasks", filters={"job_id": job_id})
+        delete("jobs", filters={"id": job_id})
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    return {"status": "deleted", "job_id": job_id}
+
+
+# ---------------------------------------------------------------------------
+# Delete offline node endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/api/nodes/{node_id}", summary="Delete an offline worker node")
+async def delete_node(node_id: str) -> dict[str, str]:
+    """Delete an offline worker node.
+
+    Only nodes with status 'offline' can be deleted. Returns 409 if the
+    node is idle or busy.
+    """
+    try:
+        node = select_one("nodes", columns="id, status", filters={"id": node_id})
+    except RecordNotFoundError:
+        raise HTTPException(status_code=404, detail={"error": "Not Found"})
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    if node["status"] != "offline":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Can only delete nodes that are offline"},
+        )
+
+    try:
+        delete("nodes", filters={"id": node_id})
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    return {"status": "deleted", "node_id": node_id}

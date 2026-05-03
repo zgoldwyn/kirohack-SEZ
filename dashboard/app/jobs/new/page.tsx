@@ -4,7 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { postJSON } from "@/lib/api";
-import type { JobSubmissionRequest, JobSubmissionResponse, ApiError } from "@/lib/types";
+import type {
+  JobSubmissionRequest,
+  JobSubmissionResponse,
+  ApiError,
+} from "@/lib/types";
 
 const DATASETS = ["MNIST", "Fashion-MNIST", "synthetic"] as const;
 const MODEL_TYPES = ["MLP"] as const;
@@ -67,18 +71,21 @@ interface FieldProps {
 function Field({ label, htmlFor, hint, required, children }: FieldProps) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700">
+      <label
+        htmlFor={htmlFor}
+        className="block text-sm font-medium text-slate-700"
+      >
         {label}
-        {required && <span className="ml-1 text-red-500">*</span>}
+        {required && <span className="ml-1 text-red-400">*</span>}
       </label>
-      {hint && <p className="mt-0.5 text-xs text-gray-500">{hint}</p>}
-      <div className="mt-1">{children}</div>
+      {hint && <p className="mt-0.5 text-xs text-slate-400">{hint}</p>}
+      <div className="mt-1.5">{children}</div>
     </div>
   );
 }
 
 const inputClass =
-  "block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500";
+  "block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm shadow-sm transition-colors focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-400";
 
 export default function NewJobPage() {
   const router = useRouter();
@@ -105,7 +112,9 @@ export default function NewJobPage() {
 
     const hiddenLayers = parseHiddenLayers(form.hidden_layers);
     if (form.hidden_layers.trim() && hiddenLayers.length === 0) {
-      setError("Hidden layers must be comma-separated positive integers (e.g. 128,64).");
+      setError(
+        "Hidden layers must be comma-separated positive integers (e.g. 128,64)."
+      );
       return;
     }
 
@@ -127,10 +136,10 @@ export default function NewJobPage() {
 
     setSubmitting(true);
     try {
-      const result = await postJSON<JobSubmissionRequest, JobSubmissionResponse>(
-        "/api/jobs",
-        payload
-      );
+      const result = await postJSON<
+        JobSubmissionRequest,
+        JobSubmissionResponse
+      >("/api/jobs", payload);
       router.push(`/jobs/${result.job_id}`);
     } catch (err) {
       setError(formatApiError(err));
@@ -143,22 +152,31 @@ export default function NewJobPage() {
     <div className="mx-auto max-w-2xl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Submit New Job</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Configure and submit a distributed ML training job.
+          <h1 className="text-2xl font-bold text-slate-900">
+            Submit New Job
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Configure and submit a distributed ML training job
           </p>
         </div>
-        <Link href="/jobs" className="text-sm text-gray-500 hover:text-gray-700">
+        <Link
+          href="/jobs"
+          className="text-sm font-medium text-slate-400 hover:text-slate-600 transition-colors"
+        >
           ← Back to Jobs
         </Link>
       </div>
 
       <form
         onSubmit={handleSubmit}
-        className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm space-y-6"
+        className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm space-y-6"
       >
         {/* Job name */}
-        <Field label="Job Name" htmlFor="job_name" hint="Optional human-readable name">
+        <Field
+          label="Job Name"
+          htmlFor="job_name"
+          hint="Optional human-readable name"
+        >
           <input
             id="job_name"
             name="job_name"
@@ -170,41 +188,42 @@ export default function NewJobPage() {
           />
         </Field>
 
-        {/* Dataset */}
-        <Field label="Dataset" htmlFor="dataset_name" required>
-          <select
-            id="dataset_name"
-            name="dataset_name"
-            value={form.dataset_name}
-            onChange={handleChange}
-            className={inputClass}
-            required
-          >
-            {DATASETS.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </Field>
+        {/* Dataset & Model row */}
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Dataset" htmlFor="dataset_name" required>
+            <select
+              id="dataset_name"
+              name="dataset_name"
+              value={form.dataset_name}
+              onChange={handleChange}
+              className={inputClass}
+              required
+            >
+              {DATASETS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </Field>
 
-        {/* Model type */}
-        <Field label="Model Type" htmlFor="model_type" required>
-          <select
-            id="model_type"
-            name="model_type"
-            value={form.model_type}
-            onChange={handleChange}
-            className={inputClass}
-            required
-          >
-            {MODEL_TYPES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </Field>
+          <Field label="Model Type" htmlFor="model_type" required>
+            <select
+              id="model_type"
+              name="model_type"
+              value={form.model_type}
+              onChange={handleChange}
+              className={inputClass}
+              required
+            >
+              {MODEL_TYPES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
 
         {/* Worker count */}
         <Field
@@ -227,8 +246,10 @@ export default function NewJobPage() {
         </Field>
 
         {/* Hyperparameters section */}
-        <div className="border-t border-gray-100 pt-4">
-          <h2 className="mb-4 text-sm font-semibold text-gray-700">Hyperparameters</h2>
+        <div className="border-t border-slate-100 pt-6">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500">
+            Hyperparameters
+          </h2>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Learning Rate" htmlFor="learning_rate" required>
               <input
@@ -275,7 +296,7 @@ export default function NewJobPage() {
             <Field
               label="Hidden Layers"
               htmlFor="hidden_layers"
-              hint="Comma-separated integers, e.g. 128,64"
+              hint="Comma-separated, e.g. 128,64"
               required
             >
               <input
@@ -294,23 +315,26 @@ export default function NewJobPage() {
 
         {/* Error display */}
         {error && (
-          <div className="rounded-md bg-red-50 border border-red-200 p-4 text-sm text-red-700">
-            <strong>Error:</strong> {error}
+          <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700 flex items-start gap-3">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-500 text-xs">
+              !
+            </span>
+            <span>{error}</span>
           </div>
         )}
 
         {/* Submit */}
-        <div className="flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
+        <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-6">
           <Link
             href="/jobs"
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
           >
             Cancel
           </Link>
           <button
             type="submit"
             disabled={submitting}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
           >
             {submitting ? "Submitting…" : "Submit Job"}
           </button>

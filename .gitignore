@@ -17,6 +17,12 @@ build/
 node_modules/
 .next/
 
+# Data
+data/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Local Netlify folder
+.netlify
