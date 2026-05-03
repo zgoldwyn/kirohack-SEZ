@@ -525,8 +525,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify job marked failed with error_summary, partial checkpoint stored
     - **Validates: Requirements 6.4, 14.3**
 
-- [ ] 31. Coordinator storage module update
-  - [ ] 31.1 Update `coordinator/storage.py` for parameter and gradient storage
+- [x] 31. Coordinator storage module update
+  - [x] 31.1 Update `coordinator/storage.py` for parameter and gradient storage
     - Add `upload_blob(bucket, path, data: bytes)`: upload binary data to Supabase Storage
     - Add `download_blob(bucket, path) -> bytes`: download binary data from Supabase Storage
     - Add `delete_blob(bucket, path)`: delete a blob from Supabase Storage
@@ -535,11 +535,11 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - These are used by `param_server.py` and `aggregator.py` for parameter/gradient storage
     - _Requirements: 7.1, 13.1, 13.2_
 
-- [ ] 32. Checkpoint — Ensure all tests pass
+- [x] 32. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 33. Heartbeat monitor update for collaborative training
-  - [ ] 33.1 Update `coordinator/heartbeat.py` for mid-training failure handling
+- [x] 33. Heartbeat monitor update for collaborative training
+  - [x] 33.1 Update `coordinator/heartbeat.py` for mid-training failure handling
     - When a node goes offline with an active task in a running job:
       - Mark the task as "failed" (existing behavior)
       - Call `barrier.remove_worker(job_id, task_id)` to remove worker from active set and adjust barrier

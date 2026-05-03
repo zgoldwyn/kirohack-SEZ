@@ -18,11 +18,9 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 import torch
 
 from coordinator import db
@@ -33,109 +31,14 @@ from coordinator.constants import (
 )
 from coordinator import barrier as barrier_mod
 from coordinator import param_server
+from coordinator.storage import (
+    GRADIENTS_BUCKET,
+    delete_blob,
+    download_blob,
+    list_blobs,
+)
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Storage bucket for gradient payloads
-# ---------------------------------------------------------------------------
-
-GRADIENTS_BUCKET = "gradients"
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers — Supabase Storage HTTP API for gradients
-# ---------------------------------------------------------------------------
-
-
-def _get_storage_config() -> tuple[str, str]:
-    """Return ``(supabase_url, supabase_key)`` from environment variables."""
-    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    key = os.getenv("SUPABASE_KEY", "")
-    if not supabase_url or not key:
-        raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_KEY must be set for storage operations"
-        )
-    return supabase_url, key
-
-
-def _auth_headers(key: str) -> dict[str, str]:
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-    }
-
-
-def _download_blob(bucket: str, path: str) -> bytes:
-    """Download a binary blob from Supabase Storage."""
-    supabase_url, key = _get_storage_config()
-    headers = _auth_headers(key)
-    object_url = f"{supabase_url}/storage/v1/object/{bucket}/{path}"
-
-    resp = httpx.get(object_url, headers=headers, timeout=60.0)
-    resp.raise_for_status()
-    return resp.content
-
-
-def _delete_blob(bucket: str, path: str) -> None:
-    """Delete a single blob from Supabase Storage.
-
-    Uses the Supabase Storage ``/object/{bucket}`` DELETE endpoint which
-    accepts a JSON body with a list of prefixes to remove.
-    """
-    supabase_url, key = _get_storage_config()
-    headers = _auth_headers(key)
-    headers["Content-Type"] = "application/json"
-
-    url = f"{supabase_url}/storage/v1/object/{bucket}"
-    resp = httpx.delete(url, headers=headers, json={"prefixes": [path]}, timeout=30.0)
-    # 200 or 404 are both acceptable (file may already be gone)
-    if resp.status_code not in (200, 201, 204, 404):
-        logger.warning(
-            "Failed to delete blob %s/%s: %s %s",
-            bucket,
-            path,
-            resp.status_code,
-            resp.text,
-        )
-
-
-def _list_blobs(bucket: str, prefix: str) -> list[str]:
-    """List blob names under *prefix* in *bucket*.
-
-    Returns a list of object names (relative to the bucket root).
-    """
-    supabase_url, key = _get_storage_config()
-    headers = _auth_headers(key)
-    headers["Content-Type"] = "application/json"
-
-    url = f"{supabase_url}/storage/v1/object/list/{bucket}"
-    resp = httpx.post(
-        url,
-        headers=headers,
-        json={"prefix": prefix, "limit": 1000},
-        timeout=30.0,
-    )
-    if resp.status_code != 200:
-        logger.warning(
-            "Failed to list blobs under %s/%s: %s %s",
-            bucket,
-            prefix,
-            resp.status_code,
-            resp.text,
-        )
-        return []
-
-    items = resp.json()
-    if not isinstance(items, list):
-        return []
-
-    return [
-        f"{prefix}{item['name']}" if prefix and not prefix.endswith("/")
-        else f"{prefix}{item['name']}"
-        for item in items
-        if isinstance(item, dict) and "name" in item
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +118,7 @@ def aggregate_round(job_id: str, round_number: int) -> None:
             )
             continue
         try:
-            data = _download_blob(GRADIENTS_BUCKET, gradient_path)
+            data = download_blob(GRADIENTS_BUCKET, gradient_path)
             grad_dict = _deserialize_state_dict(data)
             gradient_dicts.append(grad_dict)
         except Exception:
@@ -658,7 +561,7 @@ def _cleanup_round_gradients(
         gradient_path = sub.get("gradient_path", "")
         if gradient_path:
             try:
-                _delete_blob(GRADIENTS_BUCKET, gradient_path)
+                delete_blob(GRADIENTS_BUCKET, gradient_path)
             except Exception:
                 logger.warning(
                     "event=gradient_cleanup_failed | job_id=%s | round=%d | path=%s",

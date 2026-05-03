@@ -23,23 +23,21 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 import torch
 
 from coordinator.db import DatabaseError, insert
+from coordinator.storage import (
+    CHECKPOINTS_BUCKET,
+    PARAMETERS_BUCKET,
+    StorageError,
+    download_blob,
+    upload_blob,
+)
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-PARAMETERS_BUCKET = "parameters"
-CHECKPOINTS_BUCKET = "checkpoints"
 
 
 # ---------------------------------------------------------------------------
@@ -49,109 +47,6 @@ CHECKPOINTS_BUCKET = "checkpoints"
 
 class ParamServerError(DatabaseError):
     """Raised when a parameter server operation fails."""
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers — Supabase Storage HTTP API
-# ---------------------------------------------------------------------------
-
-
-def _get_storage_config() -> tuple[str, str]:
-    """Return ``(supabase_url, supabase_key)`` from environment variables.
-
-    Raises :class:`ParamServerError` if either variable is missing.
-    """
-    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    key = os.getenv("SUPABASE_KEY", "")
-    if not supabase_url or not key:
-        raise ParamServerError(
-            "SUPABASE_URL and SUPABASE_KEY must be set for storage operations"
-        )
-    return supabase_url, key
-
-
-def _auth_headers(key: str) -> dict[str, str]:
-    """Standard auth headers for Supabase Storage requests."""
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-    }
-
-
-def _upload_blob(bucket: str, path: str, data: bytes) -> None:
-    """Upload a binary blob to Supabase Storage, overwriting if it exists.
-
-    Uses an *upsert* approach: first attempts a POST (create); if the
-    object already exists (HTTP 409 / 400 with "Duplicate"), falls back
-    to a PUT (update).
-
-    Raises :class:`ParamServerError` on failure.
-    """
-    supabase_url, key = _get_storage_config()
-    headers = _auth_headers(key)
-    headers["Content-Type"] = "application/octet-stream"
-
-    object_url = f"{supabase_url}/storage/v1/object/{bucket}/{path}"
-
-    try:
-        # Try create first
-        resp = httpx.post(
-            object_url,
-            headers=headers,
-            content=data,
-            timeout=60.0,
-        )
-        if resp.status_code in (200, 201):
-            return
-
-        # If the object already exists, update it
-        resp = httpx.put(
-            object_url,
-            headers=headers,
-            content=data,
-            timeout=60.0,
-        )
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise ParamServerError(
-            f"Failed to upload blob to {bucket}/{path}: "
-            f"{exc.response.status_code} {exc.response.text}"
-        ) from exc
-    except Exception as exc:
-        raise ParamServerError(
-            f"Failed to upload blob to {bucket}/{path}: {exc}"
-        ) from exc
-
-
-def _download_blob(bucket: str, path: str) -> bytes:
-    """Download a binary blob from Supabase Storage.
-
-    Returns the raw bytes of the stored object.
-
-    Raises :class:`ParamServerError` on failure.
-    """
-    supabase_url, key = _get_storage_config()
-    headers = _auth_headers(key)
-
-    object_url = f"{supabase_url}/storage/v1/object/{bucket}/{path}"
-
-    try:
-        resp = httpx.get(
-            object_url,
-            headers=headers,
-            timeout=60.0,
-        )
-        resp.raise_for_status()
-        return resp.content
-    except httpx.HTTPStatusError as exc:
-        raise ParamServerError(
-            f"Failed to download blob from {bucket}/{path}: "
-            f"{exc.response.status_code} {exc.response.text}"
-        ) from exc
-    except Exception as exc:
-        raise ParamServerError(
-            f"Failed to download blob from {bucket}/{path}: {exc}"
-        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +125,7 @@ def initialize_model(job_id: str, job_config: Any) -> str:
     data = _serialize_state_dict(state_dict)
 
     storage_path = f"{job_id}/current.pt"
-    _upload_blob(PARAMETERS_BUCKET, storage_path, data)
+    upload_blob(PARAMETERS_BUCKET, storage_path, data)
 
     logger.info(
         "Initialized global model for job %s (%d bytes, %d parameters)",
@@ -261,7 +156,7 @@ def get_parameters(job_id: str) -> bytes:
         If the download fails.
     """
     storage_path = f"{job_id}/current.pt"
-    data = _download_blob(PARAMETERS_BUCKET, storage_path)
+    data = download_blob(PARAMETERS_BUCKET, storage_path)
 
     logger.debug(
         "Downloaded parameters for job %s (%d bytes)", job_id, len(data)
@@ -289,7 +184,7 @@ def update_parameters(job_id: str, new_state_dict: dict[str, Any]) -> None:
     """
     data = _serialize_state_dict(new_state_dict)
     storage_path = f"{job_id}/current.pt"
-    _upload_blob(PARAMETERS_BUCKET, storage_path, data)
+    upload_blob(PARAMETERS_BUCKET, storage_path, data)
 
     logger.info(
         "Updated global model parameters for job %s (%d bytes)",
@@ -325,11 +220,11 @@ def store_checkpoint(job_id: str, round_number: int) -> str:
         If download, upload, or database insert fails.
     """
     # Download current parameters
-    data = _download_blob(PARAMETERS_BUCKET, f"{job_id}/current.pt")
+    data = download_blob(PARAMETERS_BUCKET, f"{job_id}/current.pt")
 
     # Upload as checkpoint
     checkpoint_path = f"{job_id}/round_{round_number}.pt"
-    _upload_blob(CHECKPOINTS_BUCKET, checkpoint_path, data)
+    upload_blob(CHECKPOINTS_BUCKET, checkpoint_path, data)
 
     # Insert artifact record
     now = datetime.now(timezone.utc).isoformat()

@@ -24,7 +24,6 @@ from coordinator.models import (
 from coordinator.heartbeat import heartbeat_monitor
 from coordinator.models import TaskPollResponse
 from coordinator.scheduler import create_tasks_for_job, poll_task
-from coordinator.storage import generate_signed_upload_url
 
 from coordinator.dashboard import router as dashboard_router
 
@@ -409,42 +408,6 @@ async def fail_task(
 
     return {"status": "ok"}
 
-
-# ---------------------------------------------------------------------------
-# 12.4  POST /api/tasks/{id}/upload-url
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/tasks/{task_id}/upload-url")
-async def request_upload_url(
-    task_id: str,
-    node: dict = Depends(get_current_node),
-):
-    """Generate a signed upload URL for the task's checkpoint.
-
-    - Verify task exists (404) and belongs to requesting node (403)
-    - Generate signed URL for path {job_id}/{task_id}/final.pt
-    - Return {"signed_url": "<url>"}
-    """
-    task = _get_task_or_404(task_id)
-    _verify_task_ownership(task, node)
-
-    job_id = task["job_id"]
-
-    try:
-        result = generate_signed_upload_url(job_id, task_id)
-    except Exception as exc:
-        logger.error("Failed to generate signed upload URL: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate signed upload URL",
-        ) from exc
-
-    # generate_signed_upload_url returns a dict with "signed_url", "token", "path"
-    # Extract just the URL string for the worker
-    if isinstance(result, dict):
-        return {"signed_url": result.get("signed_url", result)}
-    return {"signed_url": result}
 
 
 

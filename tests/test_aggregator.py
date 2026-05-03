@@ -1,97 +1,20 @@
-"""Unit tests for coordinator/aggregator.py — metrics aggregation and job failure detection."""
+"""Unit tests for coordinator/aggregator.py — job failure detection.
+
+Tests the check_job_failure function which now:
+- Queries tasks for the job
+- If has_failed and not has_active: marks job failed
+- Queries training_rounds for completed rounds to store partial checkpoint
+  via param_server.store_checkpoint()
+"""
 
 from __future__ import annotations
 
-from unittest.mock import patch, call
+from unittest.mock import patch, MagicMock
 
 import pytest
 
-from coordinator.aggregator import aggregate_job_metrics, check_job_failure
-from coordinator.constants import JobStatus, TaskStatus
-
-
-# ---------------------------------------------------------------------------
-# aggregate_job_metrics
-# ---------------------------------------------------------------------------
-
-
-class TestAggregateJobMetrics:
-    """Tests for aggregate_job_metrics."""
-
-    def test_aggregates_mean_loss_and_accuracy(self):
-        """Computes correct mean loss and accuracy from final epoch metrics."""
-        tasks = [
-            {"id": "t1", "node_id": "n1", "status": TaskStatus.COMPLETED.value},
-            {"id": "t2", "node_id": "n2", "status": TaskStatus.COMPLETED.value},
-        ]
-        # Task t1: epochs 0,1,2 — final epoch is 2
-        t1_metrics = [
-            {"epoch": 0, "loss": 1.0, "accuracy": 0.5},
-            {"epoch": 1, "loss": 0.5, "accuracy": 0.7},
-            {"epoch": 2, "loss": 0.2, "accuracy": 0.9},
-        ]
-        # Task t2: epochs 0,1 — final epoch is 1
-        t2_metrics = [
-            {"epoch": 0, "loss": 0.8, "accuracy": 0.6},
-            {"epoch": 1, "loss": 0.4, "accuracy": 0.8},
-        ]
-
-        def mock_select(table, columns="*", filters=None):
-            if table == "tasks":
-                return tasks
-            if table == "metrics":
-                task_id = filters.get("task_id")
-                if task_id == "t1":
-                    return t1_metrics
-                if task_id == "t2":
-                    return t2_metrics
-            return []
-
-        with patch("coordinator.aggregator.db") as mock_db:
-            mock_db.select.side_effect = mock_select
-            mock_db.update.return_value = []
-
-            aggregate_job_metrics("job-1")
-
-            # Verify the update call
-            mock_db.update.assert_called_once()
-            args = mock_db.update.call_args[0]
-            assert args[0] == "jobs"
-            data = args[1]
-            assert data["status"] == JobStatus.COMPLETED.value
-            assert "completed_at" in data
-
-            agg = data["aggregated_metrics"]
-            # mean_loss = (0.2 + 0.4) / 2 = 0.3
-            assert abs(agg["mean_loss"] - 0.3) < 1e-9
-            # mean_accuracy = (0.9 + 0.8) / 2 = 0.85
-            assert abs(agg["mean_accuracy"] - 0.85) < 1e-9
-            assert len(agg["per_node"]) == 2
-
-    def test_handles_no_metrics(self):
-        """Tasks with no metrics get None values in breakdown."""
-        tasks = [
-            {"id": "t1", "node_id": "n1", "status": TaskStatus.COMPLETED.value},
-        ]
-
-        def mock_select(table, columns="*", filters=None):
-            if table == "tasks":
-                return tasks
-            if table == "metrics":
-                return []
-            return []
-
-        with patch("coordinator.aggregator.db") as mock_db:
-            mock_db.select.side_effect = mock_select
-            mock_db.update.return_value = []
-
-            aggregate_job_metrics("job-1")
-
-            data = mock_db.update.call_args[0][1]
-            agg = data["aggregated_metrics"]
-            assert agg["mean_loss"] is None
-            assert agg["mean_accuracy"] is None
-            assert agg["per_node"][0]["loss"] is None
+from coordinator.aggregator import check_job_failure
+from coordinator.constants import JobStatus, TaskStatus, TrainingRoundStatus
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +28,20 @@ class TestCheckJobFailure:
     def test_marks_job_failed_when_all_tasks_done_with_failures(self):
         """Job is marked failed when some tasks failed and none are active."""
         all_tasks = [
-            {"id": "t1", "status": TaskStatus.COMPLETED.value, "shard_index": 0, "error_message": None},
-            {"id": "t2", "status": TaskStatus.FAILED.value, "shard_index": 1, "error_message": "OOM"},
+            {"id": "t1", "status": TaskStatus.COMPLETED.value, "shard_index": 0, "node_id": "n1", "error_message": None},
+            {"id": "t2", "status": TaskStatus.FAILED.value, "shard_index": 1, "node_id": "n2", "error_message": "OOM"},
         ]
 
-        with patch("coordinator.aggregator.db") as mock_db:
-            mock_db.select.return_value = all_tasks
+        def mock_select(table, columns="*", filters=None):
+            if table == "tasks":
+                return all_tasks
+            if table == "training_rounds":
+                return []  # No completed rounds
+            return []
+
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
+            mock_db.select.side_effect = mock_select
             mock_db.update.return_value = []
 
             check_job_failure("job-1")
@@ -125,11 +56,12 @@ class TestCheckJobFailure:
     def test_does_not_mark_failed_when_tasks_still_active(self):
         """Job is NOT marked failed when some tasks are still running."""
         all_tasks = [
-            {"id": "t1", "status": TaskStatus.RUNNING.value, "shard_index": 0},
-            {"id": "t2", "status": TaskStatus.FAILED.value, "shard_index": 1, "error_message": "OOM"},
+            {"id": "t1", "status": TaskStatus.RUNNING.value, "shard_index": 0, "node_id": "n1"},
+            {"id": "t2", "status": TaskStatus.FAILED.value, "shard_index": 1, "node_id": "n2", "error_message": "OOM"},
         ]
 
-        with patch("coordinator.aggregator.db") as mock_db:
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
             mock_db.select.return_value = all_tasks
 
             check_job_failure("job-1")
@@ -139,13 +71,111 @@ class TestCheckJobFailure:
     def test_does_not_mark_failed_when_no_failures(self):
         """Job is NOT marked failed when all tasks completed successfully."""
         all_tasks = [
-            {"id": "t1", "status": TaskStatus.COMPLETED.value, "shard_index": 0},
-            {"id": "t2", "status": TaskStatus.COMPLETED.value, "shard_index": 1},
+            {"id": "t1", "status": TaskStatus.COMPLETED.value, "shard_index": 0, "node_id": "n1"},
+            {"id": "t2", "status": TaskStatus.COMPLETED.value, "shard_index": 1, "node_id": "n2"},
         ]
 
-        with patch("coordinator.aggregator.db") as mock_db:
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
             mock_db.select.return_value = all_tasks
 
             check_job_failure("job-1")
 
             mock_db.update.assert_not_called()
+
+    def test_stores_partial_checkpoint_when_rounds_completed(self):
+        """When job fails with completed rounds, a partial checkpoint is stored."""
+        all_tasks = [
+            {"id": "t1", "status": TaskStatus.FAILED.value, "shard_index": 0, "node_id": "n1", "error_message": "OOM"},
+        ]
+        completed_rounds = [
+            {"id": "r1", "round_number": 0, "status": TrainingRoundStatus.COMPLETED.value},
+            {"id": "r2", "round_number": 1, "status": TrainingRoundStatus.COMPLETED.value},
+        ]
+
+        def mock_select(table, columns="*", filters=None):
+            if table == "tasks":
+                return all_tasks
+            if table == "training_rounds":
+                return completed_rounds
+            return []
+
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
+            mock_db.select.side_effect = mock_select
+            mock_db.update.return_value = []
+            mock_ps.store_checkpoint.return_value = "checkpoints/job-1/round_1.pt"
+
+            check_job_failure("job-1")
+
+            # Should store checkpoint for the last completed round (round 1)
+            mock_ps.store_checkpoint.assert_called_once_with("job-1", 1)
+
+            # Job update should include the checkpoint path
+            data = mock_db.update.call_args[0][1]
+            assert data["status"] == JobStatus.FAILED.value
+            assert data["global_model_path"] == "checkpoints/job-1/round_1.pt"
+
+    def test_no_partial_checkpoint_when_no_rounds_completed(self):
+        """When job fails with no completed rounds, no checkpoint is stored."""
+        all_tasks = [
+            {"id": "t1", "status": TaskStatus.FAILED.value, "shard_index": 0, "node_id": "n1", "error_message": "crash"},
+        ]
+
+        def mock_select(table, columns="*", filters=None):
+            if table == "tasks":
+                return all_tasks
+            if table == "training_rounds":
+                return []  # No completed rounds
+            return []
+
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
+            mock_db.select.side_effect = mock_select
+            mock_db.update.return_value = []
+
+            check_job_failure("job-1")
+
+            mock_ps.store_checkpoint.assert_not_called()
+            data = mock_db.update.call_args[0][1]
+            assert data["status"] == JobStatus.FAILED.value
+            assert "global_model_path" not in data
+
+    def test_does_nothing_when_no_tasks(self):
+        """Does nothing when there are no tasks for the job."""
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
+            mock_db.select.return_value = []
+
+            check_job_failure("job-1")
+
+            mock_db.update.assert_not_called()
+
+    def test_handles_checkpoint_store_failure_gracefully(self):
+        """Job is still marked failed even if checkpoint storage fails."""
+        all_tasks = [
+            {"id": "t1", "status": TaskStatus.FAILED.value, "shard_index": 0, "node_id": "n1", "error_message": "OOM"},
+        ]
+        completed_rounds = [
+            {"id": "r1", "round_number": 0, "status": TrainingRoundStatus.COMPLETED.value},
+        ]
+
+        def mock_select(table, columns="*", filters=None):
+            if table == "tasks":
+                return all_tasks
+            if table == "training_rounds":
+                return completed_rounds
+            return []
+
+        with patch("coordinator.aggregator.db") as mock_db, \
+             patch("coordinator.aggregator.param_server") as mock_ps:
+            mock_db.select.side_effect = mock_select
+            mock_db.update.return_value = []
+            mock_ps.store_checkpoint.side_effect = Exception("Storage unavailable")
+
+            check_job_failure("job-1")
+
+            # Job should still be marked failed
+            data = mock_db.update.call_args[0][1]
+            assert data["status"] == JobStatus.FAILED.value
+            assert "global_model_path" not in data
