@@ -642,8 +642,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Keep `report_metrics()` for backward compatibility or remove if fully replaced by inline gradient metrics
     - _Requirements: 5.1, 5.6, 13.1, 13.2_
 
-- [ ] 43. Worker trainer rewrite for collaborative training
-  - [ ] 43.1 Rewrite `worker/trainer.py` for round-based gradient computation
+- [x] 43. Worker trainer rewrite for collaborative training
+  - [x] 43.1 Rewrite `worker/trainer.py` for round-based gradient computation
     - Replace independent training loop with collaborative round-based loop:
       - `run_task()` enters a loop for `total_rounds` iterations
       - Each round:
@@ -666,22 +666,22 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify gradient dict keys match model state_dict keys, tensor shapes match
     - **Validates: Requirements 5.1**
 
-- [ ] 44. Worker storage simplification
-  - [ ] 44.1 Simplify or remove `worker/storage.py`
+- [x] 44. Worker storage simplification
+  - [x] 44.1 Simplify or remove `worker/storage.py`
     - Workers no longer upload checkpoints directly — the Coordinator manages all model storage
     - Remove `StorageClient` class and `upload_checkpoint` method
     - If any utility functions remain useful, keep them; otherwise remove the module
     - Update `worker/main.py` to remove `StorageClient` instantiation and usage
     - _Requirements: 7.1, 7.5_
 
-- [ ] 45. Worker main.py update for collaborative training loop
-  - [ ] 45.1 Update `worker/main.py` to use new collaborative training loop
+- [x] 45. Worker main.py update for collaborative training loop
+  - [x] 45.1 Update `worker/main.py` to use new collaborative training loop
     - Update `_execute_task()` to call the rewritten `run_task()` from `trainer.py`
     - Remove `StorageClient` creation and passing (no longer needed)
     - After training loop completes (all rounds done or job completed), return to polling
     - _Requirements: 5.1_
 
-- [ ] 46. Checkpoint — Ensure all tests pass
+- [x] 46. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 47. Dashboard frontend updates for collaborative training

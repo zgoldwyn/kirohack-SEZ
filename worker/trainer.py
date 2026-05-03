@@ -1,13 +1,25 @@
-"""PyTorch training loop for the Worker.
+"""Collaborative training loop for the Worker.
 
-Orchestrates the full lifecycle of a single training task:
+Orchestrates the Worker's participation in a synchronized distributed
+training session coordinated by the Parameter Server (Coordinator):
 
 1. Load the dataset shard using :mod:`worker.datasets`.
 2. Instantiate the model using :mod:`worker.models`.
-3. Train for the configured number of epochs, reporting per-epoch
-   metrics (loss, accuracy) to the Coordinator via :mod:`worker.reporter`.
-4. Save the final checkpoint to a local temporary file.
-5. Upload the checkpoint via :mod:`worker.storage` and report completion.
+3. Notify the Coordinator that the task has started.
+4. Enter a round-based training loop for ``total_rounds`` iterations:
+   a. Download the current Global_Model parameters from the Coordinator.
+   b. If the job is completed or failed, exit the loop.
+   c. Load the received parameters into the local model.
+   d. Forward pass on the local data shard to compute loss and accuracy.
+   e. Backward pass to compute gradients (do NOT call ``optimizer.step()``).
+   f. Collect gradients into a ``state_dict``-like dict.
+   g. Serialize gradients via ``torch.save`` to bytes.
+   h. Submit gradients and local metrics to the Coordinator.
+5. Return to polling after the training loop completes.
+
+The Worker never applies optimizer steps — it only computes gradients.
+The Coordinator aggregates gradients from all Workers and applies the
+SGD update to the Global_Model.
 
 Training exceptions (OOM, NaN loss, unexpected errors) are caught and
 reported as task failures to the Coordinator so the job lifecycle can
@@ -16,10 +28,9 @@ proceed correctly.
 
 from __future__ import annotations
 
+import io
 import logging
 import math
-import tempfile
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -29,7 +40,6 @@ from worker.config import TaskConfig
 from worker.datasets import load_dataset
 from worker.models import build_model
 from worker.reporter import Reporter
-from worker.storage import StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +54,13 @@ class NaNLossError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Job terminal statuses — Worker should exit the training loop
+# ---------------------------------------------------------------------------
+
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed"})
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -51,15 +68,15 @@ class NaNLossError(Exception):
 async def run_task(
     task_config: TaskConfig,
     reporter: Reporter,
-    storage_client: StorageClient,
     *,
     device: str | None = None,
 ) -> None:
-    """Execute a complete training task.
+    """Execute a collaborative training task.
 
     This is the main entry point called by the Worker's poll loop.  It
-    handles the full lifecycle: start → train → upload → complete, with
-    error handling that reports failures back to the Coordinator.
+    handles the full lifecycle: start → round-based gradient computation
+    → submit, with error handling that reports failures back to the
+    Coordinator.
 
     Parameters
     ----------
@@ -67,19 +84,19 @@ async def run_task(
         Validated task configuration from the Coordinator.
     reporter:
         HTTP client for communicating with the Coordinator.
-    storage_client:
-        Client for uploading checkpoints via signed URLs.
     device:
         PyTorch device string (e.g. ``"cpu"``, ``"cuda"``).  If ``None``,
         automatically selects CUDA when available, otherwise CPU.
     """
     task_id = task_config.task_id
+    job_id = task_config.job_id
+    total_rounds = task_config.total_rounds
     hp = task_config.hyperparameters
 
     try:
         # --- Notify Coordinator that we're starting ----------------------
         await reporter.start_task(task_id)
-        logger.info("Task %s started", task_id)
+        logger.info("Task %s started (job=%s, total_rounds=%d)", task_id, job_id, total_rounds)
 
         # --- Resolve device ----------------------------------------------
         if device is None:
@@ -116,64 +133,61 @@ async def run_task(
         model = model.to(torch_device)
         logger.info("Model built: %s", task_config.model_type)
 
-        # --- Set up optimizer and loss -----------------------------------
-        optimizer = torch.optim.SGD(model.parameters(), lr=hp.learning_rate)
+        # --- Loss function (no optimizer — Worker only computes grads) ---
         criterion = nn.CrossEntropyLoss()
 
-        # --- Training loop -----------------------------------------------
-        final_loss: float | None = None
-        final_accuracy: float | None = None
+        # --- Round-based training loop -----------------------------------
+        for round_number in range(total_rounds):
+            # 1. Download current Global_Model parameters
+            param_result = await reporter.download_parameters(job_id)
 
-        for epoch in range(hp.epochs):
-            epoch_loss, epoch_accuracy = _train_one_epoch(
+            # 2. Check if job has reached a terminal state
+            if param_result.job_status in _TERMINAL_JOB_STATUSES:
+                logger.info(
+                    "Task %s: job %s is %s — exiting training loop",
+                    task_id,
+                    job_id,
+                    param_result.job_status,
+                )
+                return
+
+            # 3. Load received parameters into local model
+            param_state_dict = _deserialize_parameters(param_result.param_bytes, torch_device)
+            model.load_state_dict(param_state_dict)
+
+            # 4 & 5. Forward + backward pass to compute gradients and metrics
+            local_loss, local_accuracy = _compute_gradients(
                 model=model,
                 dataloader=dataloader,
-                optimizer=optimizer,
                 criterion=criterion,
                 device=torch_device,
-                epoch=epoch,
+                round_number=round_number,
             )
 
-            # Report metrics to Coordinator
-            await reporter.report_metrics(
+            # 6 & 7. Collect gradients and serialize to bytes
+            gradient_bytes = _collect_and_serialize_gradients(model)
+
+            # 8. Submit gradients and local metrics to Coordinator
+            await reporter.submit_gradients(
+                job_id,
+                round_number=round_number,
                 task_id=task_id,
-                epoch=epoch,
-                loss=epoch_loss,
-                accuracy=epoch_accuracy,
+                gradient_bytes=gradient_bytes,
+                local_loss=local_loss,
+                local_accuracy=local_accuracy,
             )
+
             logger.info(
-                "Task %s epoch %d/%d — loss=%.4f accuracy=%.4f",
+                "Task %s round %d/%d — loss=%.4f accuracy=%.4f (gradients submitted)",
                 task_id,
-                epoch + 1,
-                hp.epochs,
-                epoch_loss,
-                epoch_accuracy,
+                round_number + 1,
+                total_rounds,
+                local_loss,
+                local_accuracy,
             )
 
-            final_loss = epoch_loss
-            final_accuracy = epoch_accuracy
-
-        # --- Save checkpoint to temp file --------------------------------
-        checkpoint_path = _save_checkpoint(model, task_id)
-        logger.info("Checkpoint saved to %s", checkpoint_path)
-
-        # --- Upload checkpoint -------------------------------------------
-        await storage_client.upload_checkpoint(task_id, checkpoint_path)
-        logger.info("Checkpoint uploaded for task %s", task_id)
-
-        # --- Report completion -------------------------------------------
-        # The storage path follows the convention {job_id}/{task_id}/final.pt
-        storage_path = f"{task_config.job_id}/{task_id}/final.pt"
-        await reporter.complete_task(
-            task_id,
-            checkpoint_path=storage_path,
-            final_loss=final_loss,
-            final_accuracy=final_accuracy,
-        )
-        logger.info("Task %s completed successfully", task_id)
-
-        # --- Clean up temp file ------------------------------------------
-        _cleanup_checkpoint(checkpoint_path)
+        # All rounds completed — the Coordinator will finalize the job.
+        logger.info("Task %s completed all %d rounds", task_id, total_rounds)
 
     except NaNLossError as exc:
         error_msg = f"Training produced NaN loss: {exc}"
@@ -192,40 +206,42 @@ async def run_task(
 
 
 # ---------------------------------------------------------------------------
-# Training helpers
+# Gradient computation
 # ---------------------------------------------------------------------------
 
 
-def _train_one_epoch(
+def _compute_gradients(
     *,
     model: nn.Module,
     dataloader: DataLoader,
-    optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
-    epoch: int,
+    round_number: int,
 ) -> tuple[float, float]:
-    """Train the model for one epoch and return (loss, accuracy).
+    """Run a forward + backward pass over the full shard and return metrics.
+
+    The model's ``.grad`` attributes are populated after this call.
+    The caller is responsible for collecting them.  ``optimizer.step()``
+    is intentionally NOT called — the Coordinator applies the SGD update
+    after aggregating gradients from all Workers.
 
     Parameters
     ----------
     model:
-        The PyTorch model to train.
+        The PyTorch model with Global_Model parameters loaded.
     dataloader:
-        DataLoader yielding ``(inputs, labels)`` batches.
-    optimizer:
-        The optimizer instance.
+        DataLoader yielding ``(inputs, labels)`` batches for this shard.
     criterion:
         The loss function (e.g. ``CrossEntropyLoss``).
     device:
-        Device to run training on.
-    epoch:
-        Current epoch number (for logging).
+        Device to run computation on.
+    round_number:
+        Current training round (for error messages).
 
     Returns
     -------
     tuple[float, float]
-        ``(mean_loss, accuracy)`` over the entire epoch.
+        ``(mean_loss, accuracy)`` computed over the entire shard.
 
     Raises
     ------
@@ -233,6 +249,9 @@ def _train_one_epoch(
         If any batch produces a NaN loss value.
     """
     model.train()
+
+    # Zero out any existing gradients before accumulating
+    model.zero_grad()
 
     running_loss = 0.0
     correct = 0
@@ -243,19 +262,17 @@ def _train_one_epoch(
         labels = labels.to(device)
 
         # Forward pass
-        optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, labels)
 
         # Check for NaN loss
         if math.isnan(loss.item()):
             raise NaNLossError(
-                f"NaN loss at epoch {epoch}, batch {batch_idx}"
+                f"NaN loss at round {round_number}, batch {batch_idx}"
             )
 
-        # Backward pass
+        # Backward pass — accumulates gradients across all batches
         loss.backward()
-        optimizer.step()
 
         # Accumulate statistics
         running_loss += loss.item() * inputs.size(0)
@@ -270,32 +287,63 @@ def _train_one_epoch(
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint helpers
+# Gradient collection and serialization
 # ---------------------------------------------------------------------------
 
 
-def _save_checkpoint(model: nn.Module, task_id: str) -> Path:
-    """Save model state dict to a temporary file and return its path.
+def _collect_and_serialize_gradients(model: nn.Module) -> bytes:
+    """Collect gradients from model parameters and serialize to bytes.
 
-    The file is created in the system temp directory with a name that
-    includes the task ID for easy identification.  The caller is
-    responsible for cleaning up the file after upload.
+    Builds a ``state_dict``-like dictionary mapping parameter names to
+    their ``.grad`` tensors, then serializes it using ``torch.save``
+    into an in-memory bytes buffer.
+
+    Parameters
+    ----------
+    model:
+        The model whose ``.grad`` attributes have been populated by a
+        backward pass.
+
+    Returns
+    -------
+    bytes
+        Serialized gradient dict ready for submission to the Coordinator.
     """
-    tmp_dir = Path(tempfile.gettempdir()) / "group-ml-trainer"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
+    gradient_dict: dict[str, torch.Tensor] = {}
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            # Detach and clone to avoid holding references to the
+            # computation graph, and move to CPU for serialization.
+            gradient_dict[name] = param.grad.detach().cpu().clone()
 
-    checkpoint_path = tmp_dir / f"{task_id}_final.pt"
-    torch.save(model.state_dict(), checkpoint_path)
-    return checkpoint_path
+    buffer = io.BytesIO()
+    torch.save(gradient_dict, buffer)
+    return buffer.getvalue()
 
 
-def _cleanup_checkpoint(checkpoint_path: Path) -> None:
-    """Remove a temporary checkpoint file.  Logs but does not raise on failure."""
-    try:
-        checkpoint_path.unlink(missing_ok=True)
-        logger.debug("Cleaned up temp checkpoint %s", checkpoint_path)
-    except OSError as exc:
-        logger.warning("Failed to clean up checkpoint %s: %s", checkpoint_path, exc)
+# ---------------------------------------------------------------------------
+# Parameter deserialization
+# ---------------------------------------------------------------------------
+
+
+def _deserialize_parameters(param_bytes: bytes, device: torch.device) -> dict[str, torch.Tensor]:
+    """Deserialize Global_Model parameters from bytes.
+
+    Parameters
+    ----------
+    param_bytes:
+        Raw bytes produced by ``torch.save`` on the Coordinator side.
+    device:
+        Target device to load tensors onto.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        A ``state_dict`` mapping parameter names to tensors.
+    """
+    buffer = io.BytesIO(param_bytes)
+    state_dict = torch.load(buffer, map_location=device, weights_only=True)
+    return state_dict
 
 
 # ---------------------------------------------------------------------------

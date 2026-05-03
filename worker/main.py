@@ -34,7 +34,6 @@ load_dotenv()
 from worker.config import parse_task_config
 from worker.reporter import AuthenticationError, Reporter, TransientError
 from worker.state import WorkerState, delete_state, load_state, save_state
-from worker.storage import StorageClient
 from worker.trainer import run_task
 
 logger = logging.getLogger(__name__)
@@ -137,7 +136,6 @@ class Worker:
         self.coordinator_url = coordinator_url
         self.node_id = node_id or f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
         self.reporter = Reporter(coordinator_url=coordinator_url)
-        self.storage_client = StorageClient(reporter=self.reporter)
 
         # Lifecycle flags
         self._running = False
@@ -256,7 +254,6 @@ class Worker:
             await run_task(
                 task_config=task_config,
                 reporter=self.reporter,
-                storage_client=self.storage_client,
             )
 
         except AuthenticationError:
@@ -328,7 +325,6 @@ class Worker:
     async def _cleanup(self) -> None:
         """Close HTTP clients."""
         await self.reporter.close()
-        await self.storage_client.close()
         logger.info("Worker shut down cleanly")
 
     # ------------------------------------------------------------------
