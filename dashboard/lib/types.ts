@@ -94,14 +94,20 @@ export interface Artifact {
 }
 
 export interface MonitoringSummary {
-  online_nodes: number;
-  idle_nodes: number;
-  busy_nodes: number;
-  offline_nodes: number;
-  queued_jobs: number;
-  running_jobs: number;
-  completed_jobs: number;
-  failed_jobs: number;
+  nodes: {
+    online: number;
+    idle: number;
+    busy: number;
+    offline: number;
+    total: number;
+  };
+  jobs: {
+    queued: number;
+    running: number;
+    completed: number;
+    failed: number;
+    total: number;
+  };
 }
 
 export interface JobSubmissionRequest {

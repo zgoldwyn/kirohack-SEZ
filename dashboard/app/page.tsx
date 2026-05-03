@@ -153,28 +153,28 @@ export default function OverviewPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard
                 label="Online"
-                value={(data.idle_nodes ?? 0) + (data.busy_nodes ?? 0)}
+                value={data.nodes.online}
                 icon="◉"
                 color="emerald"
                 href="/nodes"
               />
               <StatCard
                 label="Idle"
-                value={data.idle_nodes}
+                value={data.nodes.idle}
                 icon="◎"
                 color="emerald"
                 href="/nodes"
               />
               <StatCard
                 label="Busy"
-                value={data.busy_nodes}
+                value={data.nodes.busy}
                 icon="⟳"
                 color="amber"
                 href="/nodes"
               />
               <StatCard
                 label="Offline"
-                value={data.offline_nodes}
+                value={data.nodes.offline}
                 icon="○"
                 color="red"
                 href="/nodes"
@@ -198,28 +198,28 @@ export default function OverviewPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard
                 label="Running"
-                value={data.running_jobs}
+                value={data.jobs.running}
                 icon="▶"
                 color="blue"
                 href="/jobs"
               />
               <StatCard
                 label="Queued"
-                value={data.queued_jobs}
+                value={data.jobs.queued}
                 icon="◷"
                 color="slate"
                 href="/jobs"
               />
               <StatCard
                 label="Completed"
-                value={data.completed_jobs}
+                value={data.jobs.completed}
                 icon="✓"
                 color="emerald"
                 href="/jobs"
               />
               <StatCard
                 label="Failed"
-                value={data.failed_jobs}
+                value={data.jobs.failed}
                 icon="✕"
                 color="red"
                 href="/jobs"
