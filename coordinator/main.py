@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from coordinator import db
 from coordinator.aggregator import aggregate_job_metrics, check_job_failure
@@ -67,6 +68,18 @@ app = FastAPI(
     description="Distributed ML task orchestration platform coordinator service.",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS — allow the Netlify frontend and local dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://kirohacks.netlify.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Dashboard read endpoints (unauthenticated, local/demo only)
