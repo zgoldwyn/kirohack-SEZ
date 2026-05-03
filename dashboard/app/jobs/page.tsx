@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { fetcher, formatDate } from "@/lib/api";
+import { fetcher, formatDate, deleteRequest } from "@/lib/api";
 import type { Job } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -17,11 +18,63 @@ function LoadingSkeleton() {
   );
 }
 
+function DeleteJobButton({ job, onDeleted }: { job: Job; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const canDelete = job.status === "completed" || job.status === "failed";
+  if (!canDelete) return null;
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteRequest(`/api/jobs/${job.id}`);
+      onDeleted();
+    } catch {
+      alert("Failed to delete job");
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 transition-colors"
+        >
+          {deleting ? "…" : "Confirm"}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+      title="Delete job"
+    >
+      Delete
+    </button>
+  );
+}
+
 export default function JobsPage() {
   const {
     data: jobs,
     error,
     isLoading,
+    mutate,
   } = useSWR<Job[]>("/api/jobs", fetcher, { refreshInterval: 10_000 });
 
   return (
@@ -54,12 +107,6 @@ export default function JobsPage() {
           <p className="mt-1 text-xs text-slate-400">
             Submit your first training job to get started
           </p>
-          <Link
-            href="/jobs/new"
-            className="mt-4 inline-block rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-500 transition-all duration-200"
-          >
-            Submit a Job
-          </Link>
         </div>
       )}
 
@@ -89,22 +136,35 @@ export default function JobsPage() {
                 <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Completed
                 </th>
+                <th className="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {jobs.map((job) => (
                 <tr key={job.id} className="table-row-hover">
                   <td className="px-5 py-4">
-                    <Link
-                      href={`/jobs/${job.id}`}
-                      className="font-medium text-indigo-600 hover:text-indigo-500 transition-colors"
-                    >
-                      {job.job_name || (
-                        <span className="font-mono text-xs text-slate-400">
-                          {job.id.slice(0, 8)}…
-                        </span>
-                      )}
-                    </Link>
+                    {job.status === "failed" ? (
+                      <span className="font-medium text-slate-600">
+                        {job.job_name || (
+                          <span className="font-mono text-xs text-slate-400">
+                            {job.id.slice(0, 8)}…
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/jobs/${job.id}`}
+                        className="font-medium text-indigo-600 hover:text-indigo-500 transition-colors"
+                      >
+                        {job.job_name || (
+                          <span className="font-mono text-xs text-slate-400">
+                            {job.id.slice(0, 8)}…
+                          </span>
+                        )}
+                      </Link>
+                    )}
                   </td>
                   <td className="px-5 py-4">
                     <StatusBadge status={job.status} />
@@ -121,6 +181,9 @@ export default function JobsPage() {
                   </td>
                   <td className="px-5 py-4 text-xs text-slate-400">
                     {formatDate(job.completed_at)}
+                  </td>
+                  <td className="px-5 py-4 text-right">
+                    <DeleteJobButton job={job} onDeleted={() => mutate()} />
                   </td>
                 </tr>
               ))}

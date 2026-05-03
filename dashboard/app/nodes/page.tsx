@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
-import { fetcher, formatDate, formatRam } from "@/lib/api";
+import Link from "next/link";
+import { fetcher, formatDate, formatRam, deleteRequest } from "@/lib/api";
 import type { Node } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -16,11 +18,62 @@ function LoadingSkeleton() {
   );
 }
 
+function DeleteNodeButton({ node, onDeleted }: { node: Node; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  if (node.status !== "offline") return null;
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteRequest(`/api/nodes/${node.id}`);
+      onDeleted();
+    } catch {
+      alert("Failed to delete node");
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 transition-colors"
+        >
+          {deleting ? "…" : "Confirm"}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+      title="Remove offline node"
+    >
+      Remove
+    </button>
+  );
+}
+
 export default function NodesPage() {
   const {
     data: nodes,
     error,
     isLoading,
+    mutate,
   } = useSWR<Node[]>("/api/nodes", fetcher, { refreshInterval: 10_000 });
 
   const onlineCount = nodes?.filter((n) => n.status !== "offline").length ?? 0;
@@ -87,6 +140,9 @@ export default function NodesPage() {
                 <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Last Heartbeat
                 </th>
+                <th className="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -94,9 +150,12 @@ export default function NodesPage() {
                 <tr key={node.id} className="table-row-hover">
                   <td className="px-5 py-4">
                     <div>
-                      <p className="font-medium text-slate-800">
+                      <Link
+                        href={`/nodes/${node.id}`}
+                        className="font-medium text-indigo-600 hover:text-indigo-500 transition-colors"
+                      >
                         {node.hostname}
-                      </p>
+                      </Link>
                       <p className="mt-0.5 font-mono text-xs text-slate-400">
                         {node.node_id}
                       </p>
@@ -127,6 +186,9 @@ export default function NodesPage() {
                   </td>
                   <td className="px-5 py-4 text-xs text-slate-400">
                     {formatDate(node.last_heartbeat)}
+                  </td>
+                  <td className="px-5 py-4 text-right">
+                    <DeleteNodeButton node={node} onDeleted={() => mutate()} />
                   </td>
                 </tr>
               ))}
