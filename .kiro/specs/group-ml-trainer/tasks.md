@@ -472,8 +472,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify `torch.save` → `torch.load` produces identical `state_dict` keys, shapes, and values
     - **Validates: Requirements 13.5**
 
-- [ ] 29. Synchronization Barrier module
-  - [ ] 29.1 Implement `coordinator/barrier.py` — Synchronization barrier logic
+- [x] 29. Synchronization Barrier module
+  - [x] 29.1 Implement `coordinator/barrier.py` — Synchronization barrier logic
     - Implement `get_active_workers(job_id)`: query `tasks` table for tasks with status in ('assigned', 'running') for the given job, return set of task IDs
     - Implement `record_submission(job_id, round_number, task_id, node_id)`: insert record into `gradient_submissions` table, increment `submitted_count` on the `training_rounds` record
     - Implement `check_barrier(job_id, round_number)`: compare `submitted_count` against `active_worker_count` in `training_rounds` table, return True if barrier is met
@@ -491,8 +491,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify active_worker_count decrements when worker removed, and already-submitted gradient is preserved
     - **Validates: Requirements 6.5, 14.2, 14.4**
 
-- [ ] 30. Gradient Aggregator rewrite
-  - [ ] 30.1 Rewrite `coordinator/aggregator.py` for gradient aggregation
+- [x] 30. Gradient Aggregator rewrite
+  - [x] 30.1 Rewrite `coordinator/aggregator.py` for gradient aggregation
     - Replace existing metrics-averaging logic with gradient aggregation logic
     - Implement `aggregate_round(job_id, round_number)`:
       - Load all gradient submissions for the round from `gradient_submissions` table
