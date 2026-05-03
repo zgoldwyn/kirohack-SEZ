@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the full project (coordinator package needs to be importable from /app)
 COPY coordinator/ coordinator/
+COPY worker/ worker/
 
 # Railway provides $PORT at runtime
 ENV PORT=8000
