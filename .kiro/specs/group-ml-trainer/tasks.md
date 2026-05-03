@@ -552,8 +552,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Verify task marked failed, worker removed from active set, barrier adjusted
     - **Validates: Requirements 14.1, 14.2**
 
-- [ ] 34. Job submission endpoint update — Global Model initialization
-  - [ ] 34.1 Update `POST /api/jobs` in `coordinator/main.py` to initialize Global_Model
+- [x] 34. Job submission endpoint update — Global Model initialization
+  - [x] 34.1 Update `POST /api/jobs` in `coordinator/main.py` to initialize Global_Model
     - After creating job record and tasks, call `param_server.initialize_model(job_id, job_config)` to create and store initial model parameters
     - Store the returned `global_model_path` on the job record
     - Set `total_rounds` on the job record (derived from `hyperparameters.epochs`)
@@ -561,13 +561,13 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Create initial `training_rounds` record for round 0 via `barrier.create_round()`
     - _Requirements: 4.2, 4.3_
 
-- [ ] 35. Task poll endpoint update
-  - [ ] 35.1 Update `GET /api/tasks/poll` to include `total_rounds` in response
+- [x] 35. Task poll endpoint update
+  - [x] 35.1 Update `GET /api/tasks/poll` to include `total_rounds` in response
     - Include `total_rounds` from the job's `hyperparameters.epochs` in the `TaskPollResponse`
     - _Requirements: 4.4_
 
-- [ ] 36. Task start endpoint update
-  - [ ] 36.1 Update `POST /api/tasks/{id}/start` to initialize round tracking
+- [x] 36. Task start endpoint update
+  - [x] 36.1 Update `POST /api/tasks/{id}/start` to initialize round tracking
     - On task start, ensure the initial `training_rounds` record exists for round 0 (idempotent)
     - _Requirements: 5.1_
 

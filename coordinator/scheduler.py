@@ -196,4 +196,5 @@ def poll_task(node: dict) -> TaskPollResponse:
         hyperparameters=task_config.get("hyperparameters"),
         shard_index=task_config.get("shard_index"),
         shard_count=task_config.get("shard_count"),
+        total_rounds=task_config.get("total_rounds"),
     )

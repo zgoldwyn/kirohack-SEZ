@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from coordinator import db
 from coordinator.aggregator import check_job_failure
 from coordinator.auth import generate_token, get_current_node, hash_token
+from coordinator.barrier import create_round, get_active_workers
 from coordinator.constants import JobStatus, NodeStatus, TaskStatus
 from coordinator.config_parser import ConfigValidationError, parse_job_config
 from coordinator.models import (
@@ -23,6 +24,7 @@ from coordinator.models import (
 )
 from coordinator.heartbeat import heartbeat_monitor
 from coordinator.models import TaskPollResponse
+from coordinator.param_server import ParamServerError, initialize_model
 from coordinator.scheduler import create_tasks_for_job, poll_task
 
 from coordinator.dashboard import router as dashboard_router
@@ -220,6 +222,9 @@ async def submit_job(body: JobSubmissionRequest):
             ),
         )
 
+    # Derive total_rounds from hyperparameters (epochs)
+    total_rounds = job_config.total_rounds
+
     # Create job record
     job_data = {
         "job_name": body.job_name,
@@ -228,6 +233,8 @@ async def submit_job(body: JobSubmissionRequest):
         "hyperparameters": job_config.hyperparameters.model_dump(),
         "shard_count": body.shard_count,
         "status": JobStatus.QUEUED.value,
+        "current_round": 0,
+        "total_rounds": total_rounds,
     }
 
     try:
@@ -251,12 +258,52 @@ async def submit_job(body: JobSubmissionRequest):
             detail="Database unavailable",
         ) from exc
 
+    # Initialize Global_Model and store initial parameters
+    try:
+        global_model_path = initialize_model(job_id, job_config)
+    except ParamServerError as exc:
+        logger.error("Failed to initialize global model for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to initialize global model",
+        ) from exc
+
+    # Update job record with global_model_path
+    try:
+        db.update(
+            "jobs",
+            {"global_model_path": global_model_path},
+            filters={"id": job_id},
+        )
+    except db.DatabaseError as exc:
+        logger.error("Failed to update job %s with global_model_path: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    # Create initial training_rounds record for round 0
+    try:
+        create_round(
+            job_id=job_id,
+            round_number=0,
+            active_worker_count=body.shard_count,
+        )
+    except db.DatabaseError as exc:
+        logger.error("Failed to create initial training round for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
     logger.info(
-        "event=job_submitted | job_id=%s | dataset=%s | model_type=%s | shard_count=%d",
+        "event=job_submitted | job_id=%s | dataset=%s | model_type=%s | shard_count=%d | total_rounds=%d | global_model_path=%s",
         job_id,
         body.dataset_name,
         body.model_type,
         body.shard_count,
+        total_rounds,
+        global_model_path,
     )
 
     return JobSubmissionResponse(job_id=job_id)
@@ -317,12 +364,14 @@ async def start_task(
     task_id: str,
     node: dict = Depends(get_current_node),
 ):
-    """Mark a task as running.
+    """Mark a task as running and ensure round 0 tracking exists.
 
     - Verify task exists (404)
     - Verify task is assigned to requesting node (403)
     - Verify task status is "assigned" (409)
     - Update status → "running", set started_at
+    - Idempotently ensure a training_rounds record exists for round 0
+    Requirements: 5.1
     """
     task = _get_task_or_404(task_id)
     _verify_task_ownership(task, node)
@@ -333,17 +382,40 @@ async def start_task(
             detail=f"Task status is '{task.get('status')}', expected 'assigned'",
         )
 
+    job_id = task["job_id"]
     now = datetime.now(timezone.utc).isoformat()
+
     db.update(
         "tasks",
         {"status": TaskStatus.RUNNING.value, "started_at": now},
         filters={"id": task_id},
     )
 
+    # Idempotently ensure a training_rounds record exists for round 0.
+    # The record is normally created during job submission, but we guard
+    # against the case where it was not (e.g. older jobs, race conditions).
+    existing_rounds = db.select(
+        "training_rounds",
+        filters={"job_id": job_id, "round_number": 0},
+    )
+    if not existing_rounds:
+        active_count = len(get_active_workers(job_id))
+        create_round(
+            job_id=job_id,
+            round_number=0,
+            active_worker_count=active_count,
+        )
+        logger.info(
+            "event=round_0_created_on_start | task_id=%s | job_id=%s | active_worker_count=%d",
+            task_id,
+            job_id,
+            active_count,
+        )
+
     logger.info(
         "event=task_started | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s",
         task_id,
-        task.get("job_id"),
+        job_id,
         node.get("node_id"),
         node["id"],
     )

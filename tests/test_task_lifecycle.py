@@ -98,13 +98,20 @@ class TestStartTask:
     """Tests for POST /api/tasks/{task_id}/start."""
 
     def test_start_task_success(self, client):
-        """Assigned task transitions to running with started_at set."""
+        """Assigned task transitions to running with started_at set and round 0 ensured."""
         with patch("coordinator.main.db") as mock_db, \
              patch("coordinator.auth.db") as mock_auth_db:
             mock_auth_db.select.return_value = [SAMPLE_NODE]
-            mock_db.select.side_effect = make_select_side_effect(
-                task=SAMPLE_TASK_ASSIGNED,
-            )
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    return [SAMPLE_TASK_ASSIGNED]
+                if table == "training_rounds":
+                    # Round 0 already exists
+                    return [{"id": "round-0", "round_number": 0}]
+                return []
+
+            mock_db.select.side_effect = _select
             mock_db.update.return_value = [SAMPLE_TASK_ASSIGNED]
 
             resp = client.post(
@@ -121,6 +128,59 @@ class TestStartTask:
             assert call_args[0][0] == "tasks"
             assert call_args[0][1]["status"] == TaskStatus.RUNNING.value
             assert "started_at" in call_args[0][1]
+
+            # Round 0 already existed, so insert should NOT have been called
+            mock_db.insert.assert_not_called()
+
+    def test_start_task_creates_round_0_if_missing(self, client):
+        """When no training_rounds record exists for round 0, one is created."""
+        with patch("coordinator.main.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db, \
+             patch("coordinator.barrier.db") as mock_barrier_db:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            active_task = {
+                **SAMPLE_TASK_ASSIGNED,
+                "status": TaskStatus.RUNNING.value,
+            }
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    if filters and "id" in filters:
+                        return [SAMPLE_TASK_ASSIGNED]
+                    # get_active_workers queries tasks by job_id
+                    if filters and "job_id" in filters:
+                        return [active_task]
+                    return []
+                if table == "training_rounds":
+                    # No round 0 exists yet
+                    return []
+                return []
+
+            mock_db.select.side_effect = _select
+            # barrier.py uses its own db import for get_active_workers
+            mock_barrier_db.select.side_effect = _select
+            mock_barrier_db.insert.return_value = {"id": "new-round-0", "round_number": 0}
+            mock_db.update.return_value = [SAMPLE_TASK_ASSIGNED]
+            mock_db.insert.return_value = {"id": "new-round-0", "round_number": 0}
+
+            resp = client.post(
+                f"/api/tasks/{SAMPLE_TASK_ASSIGNED['id']}/start",
+                headers=auth_headers(),
+            )
+
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ok"}
+
+            # Verify round 0 was created via barrier.db.insert (create_round uses barrier's db)
+            mock_barrier_db.insert.assert_called_once()
+            insert_args = mock_barrier_db.insert.call_args
+            assert insert_args[0][0] == "training_rounds"
+            insert_data = insert_args[0][1]
+            assert insert_data["job_id"] == "job-uuid-1"
+            assert insert_data["round_number"] == 0
+            assert insert_data["status"] == "in_progress"
+            assert insert_data["submitted_count"] == 0
 
     def test_start_task_not_found(self, client):
         """Returns 404 when task does not exist."""

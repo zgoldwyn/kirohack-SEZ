@@ -119,7 +119,7 @@ class TestSingleWorkerE2E:
         import coordinator.db as db_mod
         import coordinator.dashboard as dashboard_mod
         import coordinator.heartbeat as heartbeat_mod
-        import coordinator.main  # noqa: F401
+        import coordinator.main as main_mod  # noqa: F401
 
         patches = [
             patch.object(db_mod, "insert", side_effect=mem_db.insert),
@@ -130,6 +130,12 @@ class TestSingleWorkerE2E:
             patch.object(dashboard_mod, "select_one", side_effect=mem_db.select_one),
             patch.object(heartbeat_mod.heartbeat_monitor, "start", return_value=None),
             patch.object(heartbeat_mod.heartbeat_monitor, "stop"),
+            # Mock initialize_model to avoid real storage/torch calls
+            patch.object(
+                main_mod,
+                "initialize_model",
+                return_value="parameters/fake-job-id/current.pt",
+            ),
         ]
 
         for p in patches:
