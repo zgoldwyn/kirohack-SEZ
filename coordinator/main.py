@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from coordinator import db
 from coordinator.aggregator import aggregate_round, check_job_failure, complete_job
