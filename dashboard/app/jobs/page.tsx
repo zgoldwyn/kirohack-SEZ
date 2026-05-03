@@ -8,22 +8,13 @@ import type { Job } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
 
-function RoundProgress({ job }: { job: Job }) {
-  if (job.status !== "running" || job.current_round == null || job.total_rounds == null) {
-    return <span className="text-gray-400">—</span>;
-  }
+function LoadingSkeleton() {
   return (
-    <span className="text-gray-600">
-      {job.current_round} / {job.total_rounds}
-    </span>
-  );
-}
-
-export default function JobsPage() {
-  const { data: jobs, error, isLoading } = useSWR<Job[]>(
-    "/api/jobs",
-    fetcher,
-    { refreshInterval: 10_000 }
+    <div className="space-y-3">
+      {[...Array(3)].map((_, i) => (
+        <div key={i} className="h-16 rounded-xl animate-shimmer" />
+      ))}
+    </div>
   );
 }
 
@@ -120,18 +111,34 @@ export default function JobsPage() {
       )}
 
       {jobs && jobs.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Job</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Model</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Dataset</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Workers</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Round</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Created</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Completed</th>
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead>
+              <tr className="bg-slate-50/80">
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Job
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Status
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Model
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Dataset
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Shards
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Created
+                </th>
+                <th className="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Completed
+                </th>
+                <th className="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -162,13 +169,14 @@ export default function JobsPage() {
                   <td className="px-5 py-4">
                     <StatusBadge status={job.status} />
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{job.model_type}</td>
-                  <td className="px-4 py-3 text-gray-600">{job.dataset_name}</td>
-                  <td className="px-4 py-3 text-gray-600">{job.shard_count}</td>
-                  <td className="px-4 py-3">
-                    <RoundProgress job={job} />
+                  <td className="px-5 py-4 text-slate-600">
+                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium">
+                      {job.model_type}
+                    </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
+                  <td className="px-5 py-4 text-slate-600">{job.dataset_name}</td>
+                  <td className="px-5 py-4 text-slate-600">{job.shard_count}</td>
+                  <td className="px-5 py-4 text-xs text-slate-400">
                     {formatDate(job.created_at)}
                   </td>
                   <td className="px-5 py-4 text-xs text-slate-400">
