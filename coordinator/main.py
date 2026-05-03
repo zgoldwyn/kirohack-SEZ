@@ -10,17 +10,15 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 
 from coordinator import db
-from coordinator.aggregator import aggregate_job_metrics, check_job_failure
+from coordinator.aggregator import check_job_failure
 from coordinator.auth import generate_token, get_current_node, hash_token
-from coordinator.constants import ArtifactType, JobStatus, NodeStatus, TaskStatus
+from coordinator.constants import JobStatus, NodeStatus, TaskStatus
 from coordinator.config_parser import ConfigValidationError, parse_job_config
 from coordinator.models import (
     JobSubmissionRequest,
     JobSubmissionResponse,
-    MetricsReportRequest,
     NodeRegistrationRequest,
     NodeRegistrationResponse,
-    TaskCompleteRequest,
     TaskFailRequest,
 )
 from coordinator.heartbeat import heartbeat_monitor
@@ -355,86 +353,6 @@ async def start_task(
 
 
 # ---------------------------------------------------------------------------
-# 12.2  POST /api/tasks/{id}/complete
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/tasks/{task_id}/complete")
-async def complete_task(
-    task_id: str,
-    body: TaskCompleteRequest,
-    node: dict = Depends(get_current_node),
-):
-    """Mark a task as completed.
-
-    - Verify task exists (404) and belongs to requesting node (403)
-    - Update task: status → "completed", checkpoint_path, completed_at
-    - Insert artifact record
-    - Set node status → "idle"
-    - Check if all tasks in job completed → aggregate
-    - Check if job should be marked failed
-    """
-    task = _get_task_or_404(task_id)
-    _verify_task_ownership(task, node)
-
-    job_id = task["job_id"]
-    node_id = node["id"]
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Update task
-    db.update(
-        "tasks",
-        {
-            "status": TaskStatus.COMPLETED.value,
-            "checkpoint_path": body.checkpoint_path,
-            "completed_at": now,
-        },
-        filters={"id": task_id},
-    )
-
-    # Insert artifact record
-    db.insert(
-        "artifacts",
-        {
-            "job_id": job_id,
-            "task_id": task_id,
-            "node_id": node_id,
-            "artifact_type": ArtifactType.CHECKPOINT.value,
-            "storage_path": body.checkpoint_path,
-        },
-    )
-
-    # Set node back to idle
-    db.update(
-        "nodes",
-        {"status": NodeStatus.IDLE.value},
-        filters={"id": node_id},
-    )
-
-    # Check if ALL tasks in the job are now completed → aggregate
-    all_tasks = db.select("tasks", filters={"job_id": job_id})
-    all_completed = all(
-        t.get("status") == TaskStatus.COMPLETED.value for t in all_tasks
-    )
-    if all_completed:
-        aggregate_job_metrics(job_id)
-    else:
-        # Some tasks may have failed; check if job should be marked failed
-        check_job_failure(job_id)
-
-    logger.info(
-        "event=task_completed | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s | checkpoint_path=%s",
-        task_id,
-        job_id,
-        node.get("node_id"),
-        node_id,
-        body.checkpoint_path,
-    )
-
-    return {"status": "ok"}
-
-
-# ---------------------------------------------------------------------------
 # 12.3  POST /api/tasks/{id}/fail
 # ---------------------------------------------------------------------------
 
@@ -529,35 +447,4 @@ async def request_upload_url(
     return {"signed_url": result}
 
 
-# ---------------------------------------------------------------------------
-# 13.1  POST /api/metrics
-# ---------------------------------------------------------------------------
 
-
-@app.post("/api/metrics")
-async def report_metrics(
-    body: MetricsReportRequest,
-    node: dict = Depends(get_current_node),
-):
-    """Report per-epoch training metrics for a task.
-
-    - Authenticate request
-    - Verify the referenced task exists and belongs to the requesting node
-    - Insert a metrics record with job_id, task_id, node_id, epoch, loss, accuracy
-    """
-    task = _get_task_or_404(body.task_id)
-    _verify_task_ownership(task, node)
-
-    db.insert(
-        "metrics",
-        {
-            "job_id": task["job_id"],
-            "task_id": body.task_id,
-            "node_id": node["id"],
-            "epoch": body.epoch,
-            "loss": body.loss,
-            "accuracy": body.accuracy,
-        },
-    )
-
-    return {"status": "ok"}
