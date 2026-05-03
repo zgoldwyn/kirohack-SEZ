@@ -360,11 +360,13 @@ async def _async_main() -> None:
     """Async entry point that sets up signal handlers and runs the Worker."""
     worker = Worker()
 
-    loop = asyncio.get_running_loop()
-
     # Register signal handlers for graceful shutdown
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, worker.stop)
+    # add_signal_handler is not supported on Windows; fall back to
+    # KeyboardInterrupt handling in main().
+    if sys.platform != "win32":
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, worker.stop)
 
     await worker.run()
 

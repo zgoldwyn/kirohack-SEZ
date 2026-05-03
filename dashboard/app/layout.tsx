@@ -28,11 +28,18 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-gray-50 text-gray-900">
+      <body className="min-h-full flex flex-col bg-[#f8fafc] text-slate-900">
         <NavBar />
         <main className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
           {children}
         </main>
+        <footer className="border-t border-slate-200 bg-white py-4">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <p className="text-center text-xs text-slate-400">
+              Group ML Trainer — Distributed Training Platform
+            </p>
+          </div>
+        </footer>
       </body>
     </html>
   );
