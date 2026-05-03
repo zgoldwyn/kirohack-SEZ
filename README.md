@@ -81,13 +81,84 @@ python scripts/verify_schema.py
 
 This confirms all tables, columns, and the storage bucket are in place.
 
-## Running the Platform
+## Live Deployment
+
+The platform is deployed and ready to use:
+
+- **Dashboard:** https://kirohacks.netlify.app
+- **Coordinator API:** https://kirohack-sez-production.up.railway.app
+
+## Adding a Worker to the Pool
+
+To contribute a machine as a worker node, follow these steps on that machine:
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/zgoldwyn/kirohack-SEZ.git
+cd kirohack-SEZ
+```
+
+### 2. Set up Python environment
+
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r worker/requirements.txt
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r worker/requirements.txt
+```
+
+### 3. Start the worker
+
+**macOS / Linux:**
+```bash
+COORDINATOR_URL=https://kirohack-sez-production.up.railway.app python -m worker.main
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:COORDINATOR_URL="https://kirohack-sez-production.up.railway.app"
+python -m worker.main
+```
+
+That's it. The worker will:
+
+1. Auto-detect hardware (CPU cores, RAM, disk, GPU if available)
+2. Register with the Coordinator and receive an auth token
+3. Send heartbeats every 10 seconds
+4. Poll for training tasks every 5 seconds
+5. When assigned a task: load the dataset shard, train, report metrics, upload the checkpoint, and mark the task complete
+
+Your machine will appear on the [Nodes page](https://kirohacks.netlify.app/nodes) within seconds.
+
+### Worker environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `COORDINATOR_URL` | `http://localhost:8000` | Coordinator base URL |
+| `WORKER_HEARTBEAT_INTERVAL` | `10` | Seconds between heartbeats |
+| `WORKER_POLL_INTERVAL` | `5` | Seconds between task polls |
+| `WORKER_LOG_LEVEL` | `INFO` | Logging level |
+
+### Notes
+
+- Workers persist credentials to `~/.group-ml-trainer/worker_state.json` so they reconnect without re-registering after a restart.
+- If the Coordinator rejects the stored token (401), the state file is deleted automatically. Just restart the worker to re-register.
+- You can run multiple workers on the same machine by setting a custom node ID: `COORDINATOR_URL=https://kirohack-sez-production.up.railway.app python -c "import asyncio; from worker.main import Worker; asyncio.run(Worker(node_id='my-node-2').run())"`
+
+## Running Locally (Development)
 
 ### Coordinator
 
 ```bash
-cd coordinator
-pip install -r requirements.txt
+pip install -r coordinator/requirements.txt
 uvicorn coordinator.main:app --reload
 ```
 
@@ -96,23 +167,9 @@ The Coordinator starts on `http://localhost:8000` by default.
 ### Worker
 
 ```bash
-cd worker
-pip install -r requirements.txt
+pip install -r worker/requirements.txt
 python -m worker.main
 ```
-
-The worker auto-detects hardware (CPU, RAM, GPU if available), registers with the Coordinator, and begins polling for tasks. Run multiple workers on different machines (or terminals) to parallelize training.
-
-Workers persist their credentials to `~/.group-ml-trainer/worker_state.json` so they can reconnect without re-registering after a restart.
-
-**Worker environment variables:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `COORDINATOR_URL` | `http://localhost:8000` | Coordinator base URL |
-| `WORKER_HEARTBEAT_INTERVAL` | `10` | Seconds between heartbeats |
-| `WORKER_POLL_INTERVAL` | `5` | Seconds between task polls |
-| `WORKER_LOG_LEVEL` | `INFO` | Logging level |
 
 ### Dashboard
 
