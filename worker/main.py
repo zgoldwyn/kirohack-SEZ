@@ -100,6 +100,32 @@ def _detect_ram_mb() -> int:
     except (ValueError, OSError, AttributeError):
         pass
 
+    # Windows fallback via ctypes
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            mem = MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                return mem.ullTotalPhys // (1024 * 1024)
+        except Exception:
+            pass
+
     return 4096  # Conservative default
 
 
@@ -109,7 +135,17 @@ def _detect_disk_mb() -> int:
         stat = os.statvfs(".")
         return (stat.f_bavail * stat.f_frsize) // (1024 * 1024)
     except (OSError, AttributeError):
-        return 10240  # Conservative default
+        pass
+
+    # Windows fallback via shutil
+    try:
+        import shutil
+        usage = shutil.disk_usage(".")
+        return usage.free // (1024 * 1024)
+    except Exception:
+        pass
+
+    return 10240  # Conservative default
 
 
 # ---------------------------------------------------------------------------
