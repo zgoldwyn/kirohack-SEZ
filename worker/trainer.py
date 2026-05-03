@@ -59,6 +59,58 @@ class NaNLossError(Exception):
 
 _TERMINAL_JOB_STATUSES = frozenset({"completed", "failed"})
 
+# Max time to wait for a round to advance before giving up (seconds)
+_ROUND_WAIT_TIMEOUT = 300  # 5 minutes
+_ROUND_POLL_INTERVAL = 3   # seconds between checks
+
+
+# ---------------------------------------------------------------------------
+# Round synchronization helper
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_round(
+    reporter: "Reporter",
+    job_id: str,
+    expected_round: int,
+) -> "ParameterDownloadResult":
+    """Poll the coordinator until current_round >= expected_round.
+
+    Workers must wait for the coordinator to aggregate the previous round
+    before proceeding. This polls the parameters endpoint and checks the
+    X-Current-Round header.
+    """
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + _ROUND_WAIT_TIMEOUT
+
+    while True:
+        param_result = await reporter.download_parameters(job_id)
+
+        # If job is terminal, return immediately so caller can exit
+        if param_result.job_status in _TERMINAL_JOB_STATUSES:
+            return param_result
+
+        # If the coordinator has advanced to (or past) our expected round, proceed
+        if param_result.current_round >= expected_round:
+            return param_result
+
+        # Check timeout
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Timed out waiting for round {expected_round} "
+                f"(coordinator still at round {param_result.current_round})"
+            )
+
+        logger.debug(
+            "Waiting for round %d (coordinator at %d), retrying in %ds",
+            expected_round,
+            param_result.current_round,
+            _ROUND_POLL_INTERVAL,
+        )
+        await asyncio.sleep(_ROUND_POLL_INTERVAL)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -138,8 +190,8 @@ async def run_task(
 
         # --- Round-based training loop -----------------------------------
         for round_number in range(total_rounds):
-            # 1. Download current Global_Model parameters
-            param_result = await reporter.download_parameters(job_id)
+            # 1. Download current Global_Model parameters (wait for round to advance)
+            param_result = await _wait_for_round(reporter, job_id, round_number)
 
             # 2. Check if job has reached a terminal state
             if param_result.job_status in _TERMINAL_JOB_STATUSES:
