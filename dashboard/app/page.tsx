@@ -62,25 +62,25 @@ export default function OverviewPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard
                 label="Online Nodes"
-                value={(data.idle_nodes ?? 0) + (data.busy_nodes ?? 0)}
+                value={data.nodes.online}
                 color="text-green-600"
                 href="/nodes"
               />
               <StatCard
                 label="Idle"
-                value={data.idle_nodes}
+                value={data.nodes.idle}
                 color="text-green-600"
                 href="/nodes"
               />
               <StatCard
                 label="Busy"
-                value={data.busy_nodes}
+                value={data.nodes.busy}
                 color="text-amber-600"
                 href="/nodes"
               />
               <StatCard
                 label="Offline"
-                value={data.offline_nodes}
+                value={data.nodes.offline}
                 color="text-red-600"
                 href="/nodes"
               />
@@ -92,30 +92,66 @@ export default function OverviewPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard
                 label="Running"
-                value={data.running_jobs}
+                value={data.jobs.running}
                 color="text-blue-600"
                 href="/jobs"
               />
               <StatCard
                 label="Queued"
-                value={data.queued_jobs}
+                value={data.jobs.queued}
                 color="text-gray-600"
                 href="/jobs"
               />
               <StatCard
                 label="Completed"
-                value={data.completed_jobs}
+                value={data.jobs.completed}
                 color="text-green-600"
                 href="/jobs"
               />
               <StatCard
                 label="Failed"
-                value={data.failed_jobs}
+                value={data.jobs.failed}
                 color="text-red-600"
                 href="/jobs"
               />
             </div>
           </section>
+
+          {/* Running jobs with round progress */}
+          {data.running_jobs && data.running_jobs.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-4 text-lg font-semibold text-gray-700">Active Training</h2>
+              <div className="space-y-3">
+                {data.running_jobs.map((rj) => {
+                  const current = rj.current_round ?? 0;
+                  const total = rj.total_rounds ?? 0;
+                  const pct = total > 0 ? Math.min((current / total) * 100, 100) : 0;
+                  return (
+                    <Link
+                      key={rj.job_id}
+                      href={`/jobs/${rj.job_id}`}
+                      className="block rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-mono text-xs text-blue-700">
+                          {rj.job_id.slice(0, 8)}…
+                        </span>
+                        <span className="font-medium text-blue-800">
+                          Round {current} / {total}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-blue-200">
+                        <div
+                          className="h-full rounded-full bg-blue-600 transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <section>
             <h2 className="mb-4 text-lg font-semibold text-gray-700">Quick Links</h2>

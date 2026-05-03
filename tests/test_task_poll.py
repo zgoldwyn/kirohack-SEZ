@@ -65,6 +65,7 @@ SAMPLE_TASK_CONFIG = {
     },
     "shard_index": 0,
     "shard_count": 2,
+    "total_rounds": 10,
 }
 
 QUEUED_TASK = {
@@ -345,3 +346,25 @@ class TestPollForTask:
             # Should get the first task
             assert data["task_id"] == "task-uuid-1"
             assert data["shard_index"] == 0
+
+
+    def test_poll_response_includes_total_rounds(self, client):
+        """Poll response includes total_rounds field from task_config.
+        Requirements: 4.4
+        """
+        with patch("coordinator.scheduler.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db:
+            mock_auth_db.select.return_value = [IDLE_NODE]
+            mock_db.select.side_effect = make_select_side_effect(
+                node=IDLE_NODE,
+                queued_tasks=[QUEUED_TASK],
+                job=QUEUED_JOB,
+            )
+            mock_db.update.return_value = []
+
+            resp = client.get("/api/tasks/poll", headers=auth_headers())
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["task_id"] == "task-uuid-1"
+            assert data["total_rounds"] == 10

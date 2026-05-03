@@ -7,6 +7,17 @@ import type { Job } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
 
+function RoundProgress({ job }: { job: Job }) {
+  if (job.status !== "running" || job.current_round == null || job.total_rounds == null) {
+    return <span className="text-gray-400">—</span>;
+  }
+  return (
+    <span className="text-gray-600">
+      {job.current_round} / {job.total_rounds}
+    </span>
+  );
+}
+
 export default function JobsPage() {
   const { data: jobs, error, isLoading } = useSWR<Job[]>(
     "/api/jobs",
@@ -58,7 +69,8 @@ export default function JobsPage() {
                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Model</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Dataset</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-600">Shards</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-600">Workers</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-600">Round</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Created</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Completed</th>
               </tr>
@@ -84,6 +96,9 @@ export default function JobsPage() {
                   <td className="px-4 py-3 text-gray-600">{job.model_type}</td>
                   <td className="px-4 py-3 text-gray-600">{job.dataset_name}</td>
                   <td className="px-4 py-3 text-gray-600">{job.shard_count}</td>
+                  <td className="px-4 py-3">
+                    <RoundProgress job={job} />
+                  </td>
                   <td className="px-4 py-3 text-gray-500 text-xs">
                     {formatDate(job.created_at)}
                   </td>

@@ -684,8 +684,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
 - [x] 46. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 47. Dashboard frontend updates for collaborative training
-  - [ ] 47.1 Update `dashboard/lib/types.ts` for collaborative training types
+- [x] 47. Dashboard frontend updates for collaborative training
+  - [x] 47.1 Update `dashboard/lib/types.ts` for collaborative training types
     - Add `current_round`, `total_rounds`, `global_model_path` to `Job` interface
     - Add `last_submitted_round` to `Task` interface, remove `checkpoint_path`
     - Add `RoundStatus` interface: `round_number`, `status`, `active_worker_count`, `submitted_count`, `global_loss`, `global_accuracy`
@@ -694,17 +694,17 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Rename `shard_count` references to `worker_count` where user-facing
     - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-  - [ ] 47.2 Update `dashboard/lib/api.ts` if needed for new response shapes
+  - [x] 47.2 Update `dashboard/lib/api.ts` if needed for new response shapes
     - Ensure fetcher and postJSON handle binary responses if needed
     - No major changes expected — REST JSON responses
     - _Requirements: 10.1_
 
-  - [ ] 47.3 Update `dashboard/app/jobs/page.tsx` — Job list with round progress
+  - [x] 47.3 Update `dashboard/app/jobs/page.tsx` — Job list with round progress
     - Replace "Shards" column with "Workers" column
     - Add "Round" column showing `current_round / total_rounds` for running jobs
     - _Requirements: 10.1_
 
-  - [ ] 47.4 Update `dashboard/app/jobs/[id]/page.tsx` — Job detail with training progress
+  - [x] 47.4 Update `dashboard/app/jobs/[id]/page.tsx` — Job detail with training progress
     - Add training round progress bar: `current_round / total_rounds` with visual progress indicator
     - Add per-Worker contribution status table: Worker ID, status (waiting/computing/submitted), last submitted round
     - Add convergence chart section: display global loss and accuracy across training rounds (can use a simple table or basic chart)
@@ -712,58 +712,58 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Show final Global_Model checkpoint download link on completion (single checkpoint, not per-task)
     - _Requirements: 10.2, 10.3, 10.4_
 
-  - [ ] 47.5 Update `dashboard/app/jobs/new/page.tsx` — Rename shard_count to worker_count
+  - [x] 47.5 Update `dashboard/app/jobs/new/page.tsx` — Rename shard_count to worker_count
     - Rename "Shard Count" label to "Worker Count" in the form
     - Update hint text to reference workers instead of shards
     - Keep the field name `shard_count` in the API payload (backend still uses this name)
     - _Requirements: 3.1_
 
-  - [ ] 47.6 Update `dashboard/app/page.tsx` — Overview with round progress
+  - [x] 47.6 Update `dashboard/app/page.tsx` — Overview with round progress
     - If monitoring summary includes per-job round info, display current round for running jobs in the overview
     - _Requirements: 11.4_
 
-- [ ] 48. Checkpoint — Ensure all tests pass
+- [x] 48. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 49. Update existing tests for collaborative training
-  - [ ]* 49.1 Update `tests/test_aggregator.py` for gradient aggregation
+- [x] 49. Update existing tests for collaborative training
+  - [x]* 49.1 Update `tests/test_aggregator.py` for gradient aggregation
     - Replace metrics-averaging tests with gradient aggregation tests
     - Test: load gradients → compute mean → apply SGD step → verify updated parameters
     - Test: complete_job stores final checkpoint and aggregated metrics
     - Test: check_job_failure with partial checkpoint storage
     - _Requirements: 5.3, 6.1, 6.4_
 
-  - [ ]* 49.2 Update `tests/test_heartbeat.py` for barrier adjustment
+  - [x]* 49.2 Update `tests/test_heartbeat.py` for barrier adjustment
     - Test: offline node with active task → task failed → barrier adjusted → check if barrier now met
     - _Requirements: 14.1, 14.2_
 
-  - [ ]* 49.3 Update `tests/test_task_lifecycle.py` for collaborative training flow
+  - [x]* 49.3 Update `tests/test_task_lifecycle.py` for collaborative training flow
     - Test: task start → gradient submission → round advance → next round
     - Test: removed endpoints return 404 or are gone
     - _Requirements: 5.1, 5.2_
 
-  - [ ]* 49.4 Update `tests/test_task_poll.py` for total_rounds in response
+  - [x]* 49.4 Update `tests/test_task_poll.py` for total_rounds in response
     - Test: poll response includes `total_rounds` field
     - _Requirements: 4.4_
 
-- [ ] 50. Integration tests for collaborative training
-  - [ ]* 50.1 Write integration test: Full collaborative training lifecycle
+- [x] 50. Integration tests for collaborative training
+  - [x]* 50.1 Write integration test: Full collaborative training lifecycle
     - Register 2 nodes → submit job with worker_count=2 → tasks assigned → Workers download params → compute gradients → submit gradients → barrier met → aggregation → repeat for all rounds → job completed with final checkpoint and per-round metrics
     - _Requirements: 1.1, 3.1, 4.1, 4.2, 5.1, 5.2, 5.3, 6.1, 6.2, 7.1_
 
-  - [ ]* 50.2 Write integration test: Worker failure mid-training
+  - [x]* 50.2 Write integration test: Worker failure mid-training
     - Register 3 nodes → submit job → start training → one worker fails at round 2 → barrier adjusts → remaining 2 workers continue → job completes
     - _Requirements: 6.5, 14.1, 14.2_
 
-  - [ ]* 50.3 Write integration test: All workers fail
+  - [x]* 50.3 Write integration test: All workers fail
     - Register 2 nodes → submit job → both workers fail → job marked failed with partial checkpoint
     - _Requirements: 6.4, 14.3_
 
-  - [ ]* 50.4 Write integration test: Round validation
+  - [x]* 50.4 Write integration test: Round validation
     - Worker submits gradient for wrong round → 409 rejected → Worker re-syncs and submits for correct round
     - _Requirements: 13.3_
 
-- [ ] 51. Final checkpoint — Ensure all tests pass
+- [x] 51. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

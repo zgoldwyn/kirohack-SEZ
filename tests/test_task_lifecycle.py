@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from coordinator.constants import NodeStatus, TaskStatus
+from coordinator.constants import JobStatus, NodeStatus, TaskStatus
 from coordinator.main import app
 
 # ---------------------------------------------------------------------------
@@ -317,3 +317,216 @@ class TestFailTask:
 
             assert resp.status_code == 403
 
+
+
+# ---------------------------------------------------------------------------
+# Gradient submission: POST /api/jobs/{job_id}/gradients
+# ---------------------------------------------------------------------------
+
+
+SAMPLE_JOB_RUNNING = {
+    "id": "job-uuid-1",
+    "status": JobStatus.RUNNING.value,
+    "current_round": 0,
+    "total_rounds": 5,
+    "hyperparameters": {"learning_rate": 0.01, "epochs": 5},
+}
+
+
+class TestGradientSubmission:
+    """Tests for POST /api/jobs/{job_id}/gradients — collaborative training flow.
+    Requirements: 5.1, 5.2
+    """
+
+    def test_gradient_submission_records_and_checks_barrier(self, client):
+        """Submitting gradients stores the payload, records the submission
+        via barrier, and checks if the barrier is met.
+        """
+        with patch("coordinator.main.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db, \
+             patch("coordinator.main.upload_blob") as mock_upload, \
+             patch("coordinator.main.record_submission") as mock_record, \
+             patch("coordinator.main.check_barrier") as mock_barrier, \
+             patch("coordinator.main.aggregate_round") as mock_agg:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    if filters and filters.get("job_id") and filters.get("node_id"):
+                        return [SAMPLE_TASK_RUNNING]
+                    if filters and "id" in filters:
+                        return [SAMPLE_TASK_RUNNING]
+                    return []
+                if table == "jobs":
+                    return [SAMPLE_JOB_RUNNING]
+                if table == "gradient_submissions":
+                    return []  # No duplicate
+                return []
+
+            mock_db.select.side_effect = _select
+            mock_db.update.return_value = []
+            mock_db.insert.return_value = {}
+            mock_record.return_value = {"id": "sub-1"}
+            mock_barrier.return_value = False  # Barrier not yet met
+
+            resp = client.post(
+                f"/api/jobs/job-uuid-1/gradients?round_number=0&task_id=task-uuid-1&local_loss=0.5&local_accuracy=0.8",
+                headers=auth_headers(),
+                content=b"fake-gradient-data",
+            )
+
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "ok"
+            assert data["barrier_met"] is False
+
+            # Verify gradient was uploaded to storage
+            mock_upload.assert_called_once()
+
+            # Verify submission was recorded via barrier
+            mock_record.assert_called_once_with(
+                job_id="job-uuid-1",
+                round_number=0,
+                task_id="task-uuid-1",
+                node_id="node-uuid-1",
+            )
+
+            # Barrier not met, so aggregation should NOT be triggered
+            mock_agg.assert_not_called()
+
+    def test_gradient_submission_triggers_aggregation_when_barrier_met(self, client):
+        """When the barrier is met after gradient submission, aggregation
+        is triggered for the current round.
+        """
+        with patch("coordinator.main.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db, \
+             patch("coordinator.main.upload_blob"), \
+             patch("coordinator.main.record_submission") as mock_record, \
+             patch("coordinator.main.check_barrier") as mock_barrier, \
+             patch("coordinator.main.aggregate_round") as mock_agg:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    if filters and filters.get("job_id") and filters.get("node_id"):
+                        return [SAMPLE_TASK_RUNNING]
+                    return []
+                if table == "jobs":
+                    return [SAMPLE_JOB_RUNNING]
+                if table == "gradient_submissions":
+                    return []
+                return []
+
+            mock_db.select.side_effect = _select
+            mock_db.update.return_value = []
+            mock_db.insert.return_value = {}
+            mock_record.return_value = {"id": "sub-1"}
+            mock_barrier.return_value = True  # Barrier met!
+
+            resp = client.post(
+                f"/api/jobs/job-uuid-1/gradients?round_number=0&task_id=task-uuid-1",
+                headers=auth_headers(),
+                content=b"fake-gradient-data",
+            )
+
+            assert resp.status_code == 200
+            assert resp.json()["barrier_met"] is True
+
+            # Aggregation should be triggered
+            mock_agg.assert_called_once_with("job-uuid-1", 0)
+
+    def test_gradient_submission_wrong_round_returns_409(self, client):
+        """Submitting gradients for a round that doesn't match the job's
+        current_round returns 409.
+        Requirements: 13.3
+        """
+        with patch("coordinator.main.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    if filters and filters.get("job_id") and filters.get("node_id"):
+                        return [SAMPLE_TASK_RUNNING]
+                    return []
+                if table == "jobs":
+                    return [SAMPLE_JOB_RUNNING]  # current_round=0
+                return []
+
+            mock_db.select.side_effect = _select
+
+            resp = client.post(
+                f"/api/jobs/job-uuid-1/gradients?round_number=5&task_id=task-uuid-1",
+                headers=auth_headers(),
+                content=b"fake-gradient-data",
+            )
+
+            assert resp.status_code == 409
+
+    def test_gradient_submission_duplicate_returns_409(self, client):
+        """Submitting gradients twice for the same round returns 409.
+        Requirements: 13.2
+        """
+        with patch("coordinator.main.db") as mock_db, \
+             patch("coordinator.auth.db") as mock_auth_db:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            def _select(table, columns="*", filters=None):
+                if table == "tasks":
+                    if filters and filters.get("job_id") and filters.get("node_id"):
+                        return [SAMPLE_TASK_RUNNING]
+                    return []
+                if table == "jobs":
+                    return [SAMPLE_JOB_RUNNING]  # current_round=0
+                if table == "gradient_submissions":
+                    # Already submitted for this round
+                    return [{"id": "existing-sub", "round_number": 0}]
+                return []
+
+            mock_db.select.side_effect = _select
+
+            resp = client.post(
+                f"/api/jobs/job-uuid-1/gradients?round_number=0&task_id=task-uuid-1",
+                headers=auth_headers(),
+                content=b"fake-gradient-data",
+            )
+
+            assert resp.status_code == 409
+            assert "already submitted" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Removed endpoints return 404/405
+# ---------------------------------------------------------------------------
+
+
+class TestRemovedEndpoints:
+    """Verify that removed endpoints (from the independent training model)
+    return 404 or 405.
+    Requirements: 5.1, 5.2
+    """
+
+    def test_complete_endpoint_not_found(self, client):
+        """POST /api/tasks/{id}/complete should return 404 or 405."""
+        with patch("coordinator.auth.db") as mock_auth_db:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            resp = client.post(
+                "/api/tasks/task-uuid-1/complete",
+                headers=auth_headers(),
+            )
+
+            # The endpoint doesn't exist, so FastAPI returns 404 or 405
+            assert resp.status_code in (404, 405)
+
+    def test_upload_url_endpoint_not_found(self, client):
+        """POST /api/tasks/{id}/upload-url should return 404 or 405."""
+        with patch("coordinator.auth.db") as mock_auth_db:
+            mock_auth_db.select.return_value = [SAMPLE_NODE]
+
+            resp = client.post(
+                "/api/tasks/task-uuid-1/upload-url",
+                headers=auth_headers(),
+            )
+
+            assert resp.status_code in (404, 405)

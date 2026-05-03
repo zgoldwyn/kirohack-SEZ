@@ -99,7 +99,7 @@ export default function NewJobPage() {
 
     const shardCount = parseInt(form.shard_count, 10);
     if (isNaN(shardCount) || shardCount < 1) {
-      setError("Shard count must be a positive integer.");
+      setError("Worker count must be a positive integer.");
       return;
     }
 
@@ -206,11 +206,11 @@ export default function NewJobPage() {
           </select>
         </Field>
 
-        {/* Shard count */}
+        {/* Worker count */}
         <Field
-          label="Shard Count"
+          label="Worker Count"
           htmlFor="shard_count"
-          hint="Number of parallel training tasks (must not exceed idle node count)"
+          hint="Number of workers for collaborative training (must not exceed idle node count)"
           required
         >
           <input
