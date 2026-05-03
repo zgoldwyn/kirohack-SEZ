@@ -442,8 +442,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
     - Update `TaskConfig` to include `total_rounds` (int) field
     - _Requirements: 5.1, 5.6, 13.2, 13.3_
 
-- [ ] 26. Coordinator config parser update
-  - [ ] 26.1 Update `coordinator/config_parser.py` to derive `total_rounds` from epochs
+- [x] 26. Coordinator config parser update
+  - [x] 26.1 Update `coordinator/config_parser.py` to derive `total_rounds` from epochs
     - Update `JobConfig` to include `total_rounds` property derived from `hyperparameters.epochs`
     - Update `generate_task_configs` to include `total_rounds` in each `TaskConfig`
     - _Requirements: 5.5, 12.1_
@@ -451,8 +451,8 @@ Tasks 1–23 implemented the original independent-training scope and are preserv
 - [ ] 27. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 28. Parameter Server module
-  - [ ] 28.1 Implement `coordinator/param_server.py` — Global Model state management
+- [x] 28. Parameter Server module
+  - [x] 28.1 Implement `coordinator/param_server.py` — Global Model state management
     - Implement `initialize_model(job_id, job_config)`: create initial model from config using `worker/models.py` `build_model()`, serialize `state_dict` via `torch.save` to bytes, upload to Supabase Storage at `parameters/{job_id}/current.pt`, return storage path
     - Implement `get_parameters(job_id)`: download current model parameters from `parameters/{job_id}/current.pt` in Supabase Storage, return raw bytes
     - Implement `update_parameters(job_id, new_state_dict)`: serialize updated `state_dict`, upload to `parameters/{job_id}/current.pt`, overwriting previous

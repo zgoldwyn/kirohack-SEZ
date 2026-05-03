@@ -36,6 +36,11 @@ class JobConfig(BaseModel):
     hyperparameters: HyperParameters
     shard_count: int = Field(gt=0)
 
+    @property
+    def total_rounds(self) -> int:
+        """Total training rounds, derived from ``hyperparameters.epochs``."""
+        return self.hyperparameters.epochs
+
 
 class TaskConfig(BaseModel):
     """Configuration payload sent to a Worker for a single task."""
