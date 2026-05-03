@@ -1,8 +1,8 @@
 """HTTP client for Coordinator communication.
 
 Provides typed async functions for every Coordinator endpoint a Worker
-needs: registration, heartbeat, task polling, task lifecycle, metrics
-reporting, and signed-URL requests.
+needs: registration, heartbeat, task polling, task lifecycle, gradient
+exchange, and parameter download.
 
 Key behaviours
 --------------
@@ -79,6 +79,20 @@ class RegistrationResult:
 
 
 # ---------------------------------------------------------------------------
+# Parameter download result
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ParameterDownloadResult:
+    """Values returned by ``GET /api/jobs/{id}/parameters``."""
+
+    param_bytes: bytes
+    current_round: int
+    job_status: str
+
+
+# ---------------------------------------------------------------------------
 # Reporter
 # ---------------------------------------------------------------------------
 
@@ -143,9 +157,29 @@ class Reporter:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
         authenticated: bool = True,
     ) -> httpx.Response:
         """Send an HTTP request with retry logic and auth handling.
+
+        Parameters
+        ----------
+        method:
+            HTTP method (GET, POST, etc.).
+        path:
+            URL path relative to the Coordinator base URL.
+        json:
+            Optional JSON body (mutually exclusive with *content*).
+        content:
+            Optional raw binary body (mutually exclusive with *json*).
+        headers:
+            Optional extra headers merged with auth headers.
+        params:
+            Optional query parameters.
+        authenticated:
+            Whether to include the auth token header.
 
         Raises
         ------
@@ -157,7 +191,9 @@ class Reporter:
             For other non-2xx responses after the first attempt.
         """
         client = await self._get_client()
-        headers = self._auth_headers() if authenticated else {}
+        req_headers = self._auth_headers() if authenticated else {}
+        if headers:
+            req_headers.update(headers)
 
         last_exc: BaseException | None = None
 
@@ -167,7 +203,9 @@ class Reporter:
                     method,
                     path,
                     json=json,
-                    headers=headers,
+                    content=content,
+                    headers=req_headers,
+                    params=params,
                 )
 
                 # --- 401: auth failure — never retry -----------------
@@ -191,7 +229,7 @@ class Reporter:
                         path,
                     )
                     last_exc = httpx.HTTPStatusError(
-                        f"503 Service Unavailable",
+                        "503 Service Unavailable",
                         request=response.request,
                         response=response,
                     )
@@ -308,60 +346,6 @@ class Reporter:
         """
         await self._request("POST", f"/api/tasks/{task_id}/start")
 
-    async def report_metrics(
-        self,
-        *,
-        task_id: str,
-        epoch: int,
-        loss: float | None = None,
-        accuracy: float | None = None,
-    ) -> None:
-        """Report per-epoch training metrics.
-
-        ``POST /api/metrics`` (authenticated)
-        """
-        payload: dict[str, Any] = {
-            "task_id": task_id,
-            "epoch": epoch,
-        }
-        if loss is not None:
-            payload["loss"] = loss
-        if accuracy is not None:
-            payload["accuracy"] = accuracy
-
-        await self._request("POST", "/api/metrics", json=payload)
-
-    async def request_upload_url(self, task_id: str) -> str:
-        """Request a signed upload URL for the task's checkpoint.
-
-        ``POST /api/tasks/{id}/upload-url`` (authenticated)
-
-        Returns the signed URL string.
-        """
-        resp = await self._request("POST", f"/api/tasks/{task_id}/upload-url")
-        data = resp.json()
-        return data["signed_url"]
-
-    async def complete_task(
-        self,
-        task_id: str,
-        *,
-        checkpoint_path: str,
-        final_loss: float | None = None,
-        final_accuracy: float | None = None,
-    ) -> None:
-        """Report successful task completion.
-
-        ``POST /api/tasks/{id}/complete`` (authenticated)
-        """
-        payload: dict[str, Any] = {"checkpoint_path": checkpoint_path}
-        if final_loss is not None:
-            payload["final_loss"] = final_loss
-        if final_accuracy is not None:
-            payload["final_accuracy"] = final_accuracy
-
-        await self._request("POST", f"/api/tasks/{task_id}/complete", json=payload)
-
     async def fail_task(self, task_id: str, *, error_message: str) -> None:
         """Report task failure.
 
@@ -371,4 +355,70 @@ class Reporter:
             "POST",
             f"/api/tasks/{task_id}/fail",
             json={"error_message": error_message},
+        )
+
+    # ------------------------------------------------------------------
+    # Gradient exchange — collaborative training protocol
+    # ------------------------------------------------------------------
+
+    async def download_parameters(self, job_id: str) -> ParameterDownloadResult:
+        """Download the current Global_Model parameters for a job.
+
+        ``GET /api/jobs/{id}/parameters`` (authenticated)
+
+        The Coordinator returns the model parameters as a binary payload
+        (``application/octet-stream``) with metadata in custom response
+        headers (``X-Current-Round``, ``X-Job-Status``).
+
+        Returns a :class:`ParameterDownloadResult` containing the raw
+        parameter bytes and round/status metadata.  When the job is
+        completed or failed the ``param_bytes`` will be empty and the
+        Worker should exit the training loop.
+        """
+        resp = await self._request("GET", f"/api/jobs/{job_id}/parameters")
+
+        current_round = int(resp.headers.get("X-Current-Round", "0"))
+        job_status = resp.headers.get("X-Job-Status", "running")
+        param_bytes = resp.content
+
+        return ParameterDownloadResult(
+            param_bytes=param_bytes,
+            current_round=current_round,
+            job_status=job_status,
+        )
+
+    async def submit_gradients(
+        self,
+        job_id: str,
+        *,
+        round_number: int,
+        task_id: str,
+        gradient_bytes: bytes,
+        local_loss: float | None = None,
+        local_accuracy: float | None = None,
+    ) -> None:
+        """Submit a gradient update for the current training round.
+
+        ``POST /api/jobs/{id}/gradients`` (authenticated)
+
+        The gradient payload is sent as a raw binary body
+        (``application/octet-stream``).  Metadata (round number, task
+        ID, local metrics) is passed via query parameters as expected by
+        the Coordinator endpoint.
+        """
+        query_params: dict[str, Any] = {
+            "round_number": round_number,
+            "task_id": task_id,
+        }
+        if local_loss is not None:
+            query_params["local_loss"] = local_loss
+        if local_accuracy is not None:
+            query_params["local_accuracy"] = local_accuracy
+
+        await self._request(
+            "POST",
+            f"/api/jobs/{job_id}/gradients",
+            content=gradient_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+            params=query_params,
         )

@@ -30,6 +30,17 @@ export interface HyperParameters {
   [key: string]: unknown;
 }
 
+export interface RoundStatus {
+  round_number: number;
+  status: "in_progress" | "aggregating" | "completed";
+  active_worker_count: number;
+  submitted_count: number;
+  global_loss: number | null;
+  global_accuracy: number | null;
+  started_at?: string;
+  completed_at?: string | null;
+}
+
 export interface AggregatedMetrics {
   mean_loss: number | null;
   mean_accuracy: number | null;
@@ -39,6 +50,8 @@ export interface AggregatedMetrics {
     accuracy: number | null;
     task_id?: string;
   }>;
+  /** Per-round global metrics history for convergence tracking */
+  rounds?: RoundStatus[];
 }
 
 export interface Job {
@@ -49,11 +62,22 @@ export interface Job {
   hyperparameters: HyperParameters;
   shard_count: number;
   status: JobStatus;
+  current_round: number | null;
+  total_rounds: number | null;
+  global_model_path: string | null;
   aggregated_metrics: AggregatedMetrics | null;
   error_summary: Record<string, string> | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface WorkerContribution {
+  task_id: string;
+  node_id: string | null;
+  shard_index: number;
+  status: "waiting" | "computing" | "submitted" | "failed" | "completed";
+  last_submitted_round: number | null;
 }
 
 export interface Task {
@@ -63,14 +87,14 @@ export interface Task {
   shard_index: number;
   status: TaskStatus;
   task_config: Record<string, unknown>;
-  checkpoint_path: string | null;
+  last_submitted_round: number | null;
   error_message: string | null;
   assigned_at: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
   // Joined fields from metrics
-  current_epoch?: number | null;
+  latest_round?: number | null;
   latest_loss?: number | null;
   latest_accuracy?: number | null;
   // Joined node info
@@ -79,18 +103,26 @@ export interface Task {
 
 export interface JobDetail extends Job {
   tasks: Task[];
+  worker_contributions?: WorkerContribution[];
+  training_rounds?: RoundStatus[];
 }
 
 export interface Artifact {
   id: string;
   job_id: string;
-  task_id: string;
+  task_id: string | null;
   node_id: string | null;
   artifact_type: "checkpoint" | "log" | "output";
   storage_path: string;
-  epoch: number | null;
+  round_number: number | null;
   size_bytes: number | null;
   created_at: string;
+}
+
+export interface RunningJobRoundInfo {
+  job_id: string;
+  current_round: number | null;
+  total_rounds: number | null;
 }
 
 export interface MonitoringSummary {
@@ -108,6 +140,7 @@ export interface MonitoringSummary {
     failed: number;
     total: number;
   };
+  running_jobs: RunningJobRoundInfo[];
 }
 
 export interface JobSubmissionRequest {

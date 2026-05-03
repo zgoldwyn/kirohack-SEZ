@@ -4,7 +4,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { use } from "react";
 import { fetcher, formatDate, API_URL } from "@/lib/api";
-import type { JobDetail, Artifact } from "@/lib/types";
+import type { JobDetail, Artifact, RoundStatus, WorkerContribution } from "@/lib/types";
 import StatusBadge from "@/components/StatusBadge";
 import ErrorMessage from "@/components/ErrorMessage";
 
@@ -12,15 +12,55 @@ interface JobDetailPageProps {
   params: Promise<{ id: string }>;
 }
 
-function LoadingSkeleton() {
+/* ---------- Small helper components ---------- */
+
+function TrainingProgressBar({
+  currentRound,
+  totalRounds,
+}: {
+  currentRound: number;
+  totalRounds: number;
+}) {
+  const pct = totalRounds > 0 ? Math.min((currentRound / totalRounds) * 100, 100) : 0;
   return (
-    <div className="space-y-6">
-      <div className="h-10 w-64 rounded-xl animate-shimmer" />
-      <div className="h-48 rounded-xl animate-shimmer" />
-      <div className="h-64 rounded-xl animate-shimmer" />
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium text-gray-700">
+          Round {currentRound} / {totalRounds}
+        </span>
+        <span className="text-gray-500">{pct.toFixed(0)}%</span>
+      </div>
+      <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
+        <div
+          className="h-full rounded-full bg-blue-600 transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
+
+const CONTRIBUTION_STYLES: Record<string, string> = {
+  waiting: "bg-gray-100 text-gray-700",
+  computing: "bg-amber-100 text-amber-800",
+  submitted: "bg-green-100 text-green-800",
+  failed: "bg-red-100 text-red-800",
+  completed: "bg-green-100 text-green-800",
+};
+
+function ContributionBadge({ status }: { status: string }) {
+  const style = CONTRIBUTION_STYLES[status] ?? "bg-gray-100 text-gray-700";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${style}`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+      {status}
+    </span>
+  );
+}
+
+/* ---------- Main page component ---------- */
 
 export default function JobDetailPage({ params }: JobDetailPageProps) {
   const { id } = use(params);
@@ -46,6 +86,13 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   if (!job) return <LoadingSkeleton />;
 
   const hyperparams = job.hyperparameters || {};
+  const trainingRounds: RoundStatus[] = job.training_rounds ?? [];
+  const workerContributions: WorkerContribution[] = job.worker_contributions ?? [];
+
+  // Find the final global checkpoint (task_id is null)
+  const globalCheckpoint = artifacts?.find(
+    (a) => a.artifact_type === "checkpoint" && a.task_id == null
+  );
 
   return (
     <div className="space-y-8">
@@ -89,11 +136,15 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
             </dd>
           </div>
           <div>
-            <dt className="text-slate-400">Shards</dt>
-            <dd className="mt-0.5 font-medium text-slate-800">
-              {job.shard_count}
-            </dd>
+            <dt className="text-gray-500">Workers</dt>
+            <dd className="font-medium text-gray-900">{job.shard_count}</dd>
           </div>
+          {job.total_rounds != null && (
+            <div>
+              <dt className="text-gray-500">Total Rounds</dt>
+              <dd className="font-medium text-gray-900">{job.total_rounds}</dd>
+            </div>
+          )}
           <div>
             <dt className="text-slate-400">Created</dt>
             <dd className="mt-0.5 font-medium text-slate-800">
@@ -137,6 +188,102 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
           </div>
         )}
       </section>
+
+      {/* Training round progress bar (running jobs) */}
+      {job.status === "running" && job.current_round != null && job.total_rounds != null && (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-6 shadow-sm">
+          <h2 className="mb-3 text-base font-semibold text-blue-800">Training Progress</h2>
+          <TrainingProgressBar
+            currentRound={job.current_round}
+            totalRounds={job.total_rounds}
+          />
+        </section>
+      )}
+
+      {/* Per-worker contribution status */}
+      {workerContributions.length > 0 && (
+        <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold text-gray-700">
+            Worker Contributions
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Shard</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Worker Node</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Last Submitted Round</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {workerContributions
+                  .slice()
+                  .sort((a, b) => a.shard_index - b.shard_index)
+                  .map((wc) => (
+                    <tr key={wc.task_id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 font-medium text-gray-700">{wc.shard_index}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-500">
+                        {wc.node_id ? wc.node_id.slice(0, 8) + "…" : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <ContributionBadge status={wc.status} />
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {wc.last_submitted_round != null ? wc.last_submitted_round : "—"}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Convergence chart — per-round global metrics table */}
+      {trainingRounds.length > 0 && (
+        <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold text-gray-700">
+            Training Convergence
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Round</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Workers</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Submitted</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Global Loss</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Global Accuracy</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {trainingRounds.map((round) => (
+                  <tr key={round.round_number} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-medium text-gray-700">{round.round_number}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={round.status as "running" | "completed"} />
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{round.active_worker_count}</td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {round.submitted_count} / {round.active_worker_count}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {round.global_loss != null ? round.global_loss.toFixed(4) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {round.global_accuracy != null
+                        ? `${(round.global_accuracy * 100).toFixed(2)}%`
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Aggregated metrics (completed jobs) */}
       {job.status === "completed" && job.aggregated_metrics && (
@@ -209,7 +356,26 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
                   </table>
                 </div>
               </div>
-            )}
+            </div>
+          )}
+
+          {/* Global model checkpoint download */}
+          {globalCheckpoint && (
+            <div className="mt-4 border-t border-green-200 pt-4">
+              <h3 className="mb-2 text-sm font-medium text-green-700">Global Model Checkpoint</h3>
+              <a
+                href={`${API_URL}/storage/${globalCheckpoint.storage_path}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500 transition-colors"
+              >
+                ↓ Download Final Model
+              </a>
+              <p className="mt-1 font-mono text-xs text-green-600">
+                {globalCheckpoint.storage_path}
+              </p>
+            </div>
+          )}
         </section>
       )}
 
@@ -241,31 +407,17 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500">
             Tasks ({job.tasks.length})
           </h2>
-          <div className="overflow-x-auto rounded-lg border border-slate-100">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead>
-                <tr className="bg-slate-50/80">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Shard
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Status
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Node
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Epoch
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Loss
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Accuracy
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Error
-                  </th>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Shard</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Assigned Node</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Last Round</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Loss</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Accuracy</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Error</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -285,10 +437,8 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
                           ? task.node_id.slice(0, 8) + "…"
                           : "—"}
                       </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {task.current_epoch != null
-                          ? task.current_epoch
-                          : "—"}
+                      <td className="px-4 py-3 text-gray-600">
+                        {task.latest_round != null ? task.latest_round : "—"}
                       </td>
                       <td className="px-4 py-3 font-mono text-slate-600">
                         {task.latest_loss != null
@@ -326,25 +476,15 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-500">
             Artifacts ({artifacts.length})
           </h2>
-          <div className="overflow-x-auto rounded-lg border border-slate-100">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead>
-                <tr className="bg-slate-50/80">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Type
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Storage Path
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Task
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Epoch
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Created
-                  </th>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Type</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Storage Path</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Task</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Round</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-600">Created</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -369,11 +509,11 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
                         {artifact.storage_path}
                       </a>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">
-                      {artifact.task_id.slice(0, 8)}…
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">
+                      {artifact.task_id ? artifact.task_id.slice(0, 8) + "…" : "Global"}
                     </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {artifact.epoch != null ? artifact.epoch : "—"}
+                    <td className="px-4 py-3 text-gray-600">
+                      {artifact.round_number != null ? artifact.round_number : "—"}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-400">
                       {formatDate(artifact.created_at)}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify that the Supabase database contains all tables, columns, indexes,
-and the storage bucket required by Group ML Trainer.
+and the storage buckets required by Group ML Trainer.
 
 Usage:
     python scripts/verify_schema.py
@@ -48,6 +48,9 @@ EXPECTED_TABLES: dict[str, list[str]] = {
         "hyperparameters",
         "shard_count",
         "status",
+        "current_round",
+        "total_rounds",
+        "global_model_path",
         "aggregated_metrics",
         "error_summary",
         "created_at",
@@ -61,7 +64,7 @@ EXPECTED_TABLES: dict[str, list[str]] = {
         "shard_index",
         "status",
         "task_config",
-        "checkpoint_path",
+        "last_submitted_round",
         "error_message",
         "assigned_at",
         "started_at",
@@ -73,7 +76,8 @@ EXPECTED_TABLES: dict[str, list[str]] = {
         "job_id",
         "task_id",
         "node_id",
-        "epoch",
+        "round_number",
+        "metric_type",
         "loss",
         "accuracy",
         "created_at",
@@ -85,8 +89,32 @@ EXPECTED_TABLES: dict[str, list[str]] = {
         "node_id",
         "artifact_type",
         "storage_path",
-        "epoch",
+        "round_number",
         "size_bytes",
+        "created_at",
+    ],
+    "training_rounds": [
+        "id",
+        "job_id",
+        "round_number",
+        "status",
+        "active_worker_count",
+        "submitted_count",
+        "global_loss",
+        "global_accuracy",
+        "started_at",
+        "completed_at",
+        "created_at",
+    ],
+    "gradient_submissions": [
+        "id",
+        "job_id",
+        "task_id",
+        "node_id",
+        "round_number",
+        "gradient_path",
+        "local_loss",
+        "local_accuracy",
         "created_at",
     ],
 }
@@ -113,9 +141,15 @@ EXPECTED_INDEXES: dict[str, list[str]] = {
         "idx_artifacts_job_id",
         "idx_artifacts_task_id",
     ],
+    "training_rounds": [
+        "idx_training_rounds_job_id",
+    ],
+    "gradient_submissions": [
+        "idx_gradient_submissions_job_id_round",
+    ],
 }
 
-EXPECTED_STORAGE_BUCKET = "checkpoints"
+EXPECTED_STORAGE_BUCKETS = ["checkpoints", "parameters", "gradients"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -138,19 +172,13 @@ def _query_columns(client: Client, table: str) -> set[str]:
         .eq("table_name", table)
         .execute()
     )
-    # Fallback: use a lightweight SELECT to infer columns if information_schema
-    # is not exposed via PostgREST.
     if resp.data:
         return {row["column_name"] for row in resp.data}
     return set()
 
 
 def _query_columns_via_rpc(client: Client, table: str) -> set[str]:
-    """Fetch column names via an RPC call to information_schema.
-
-    Supabase PostgREST may not expose information_schema tables directly.
-    As a fallback we attempt a HEAD-style select that returns column metadata.
-    """
+    """Fetch column names via an RPC call to information_schema."""
     try:
         resp = client.rpc(
             "get_table_columns",
@@ -169,9 +197,6 @@ def _probe_table_columns(client: Client, table: str) -> set[str]:
         resp = client.table(table).select("*").limit(1).execute()
         if resp.data:
             return set(resp.data[0].keys())
-        # Table exists but is empty — try inserting nothing to trigger
-        # a validation error that lists columns.  Instead, just return
-        # empty and let the caller decide.
         return set()
     except Exception:
         return set()
@@ -250,14 +275,15 @@ def verify() -> bool:
             print(f"    SELECT indexname FROM pg_indexes WHERE indexname = '{idx}';")
     print()
 
-    # 3. Storage bucket
+    # 3. Storage buckets
     print(f"{'─' * 60}")
-    print(f"[STORAGE] bucket '{EXPECTED_STORAGE_BUCKET}'")
-    if _check_storage_bucket(client, EXPECTED_STORAGE_BUCKET):
-        print("  OK: bucket exists")
-    else:
-        print(f"  FAIL: bucket '{EXPECTED_STORAGE_BUCKET}' not found")
-        ok = False
+    for bucket_name in EXPECTED_STORAGE_BUCKETS:
+        print(f"[STORAGE] bucket '{bucket_name}'")
+        if _check_storage_bucket(client, bucket_name):
+            print("  OK: bucket exists")
+        else:
+            print(f"  FAIL: bucket '{bucket_name}' not found")
+            ok = False
 
     # Summary
     print(f"\n{'=' * 60}")

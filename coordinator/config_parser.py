@@ -147,6 +147,7 @@ def generate_task_configs(
             hyperparameters=job_config.hyperparameters,
             shard_index=i,
             shard_count=job_config.shard_count,
+            total_rounds=job_config.total_rounds,
         )
         for i in range(job_config.shard_count)
     ]

@@ -45,6 +45,14 @@ SUPPORTED_DATASETS = {"MNIST", "Fashion-MNIST", "synthetic"}
 SUPPORTED_MODEL_TYPES = {"MLP"}
 
 
+class TrainingRoundStatus(str, Enum):
+    """Possible statuses for a training round."""
+
+    IN_PROGRESS = "in_progress"
+    AGGREGATING = "aggregating"
+    COMPLETED = "completed"
+
+
 class SupportedDataset(str, Enum):
     """Datasets supported in the core MVP."""
 

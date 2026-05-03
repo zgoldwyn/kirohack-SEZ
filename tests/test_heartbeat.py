@@ -508,3 +508,138 @@ class TestHeartbeatMonitor:
             ]
             assert len(node_update_calls) == 1
             assert node_update_calls[0][0][1]["status"] == NodeStatus.OFFLINE.value
+
+    def test_offline_node_with_active_task_adjusts_barrier_and_triggers_aggregation(self):
+        """When a node goes offline with a running task in a collaborative
+        training job, the heartbeat monitor:
+        1. Fails the task
+        2. Calls barrier.remove_worker() to adjust the synchronization barrier
+        3. Checks if the barrier is now met (other workers already submitted)
+        4. If met, triggers aggregate_round()
+        Requirements: 14.1, 14.2
+        """
+        stale_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        stale_node = {
+            "id": "node-1",
+            "node_id": "worker-1",
+            "status": NodeStatus.BUSY.value,
+            "last_heartbeat": stale_time,
+        }
+        running_task = {
+            "id": "task-1",
+            "job_id": "job-1",
+            "node_id": "node-1",
+            "status": TaskStatus.RUNNING.value,
+        }
+        running_job = {
+            "id": "job-1",
+            "status": JobStatus.RUNNING.value,
+            "current_round": 2,
+        }
+
+        def mock_select(table, **kwargs):
+            filters = kwargs.get("filters")
+            if table == "nodes":
+                return [stale_node]
+            if table == "tasks":
+                if filters and filters.get("node_id") == "node-1":
+                    return [running_task]
+            if table == "jobs":
+                return [running_job]
+            return []
+
+        with patch("coordinator.heartbeat.db") as mock_db, \
+             patch("coordinator.heartbeat.barrier_mod") as mock_barrier, \
+             patch("coordinator.heartbeat.aggregate_round") as mock_agg, \
+             patch("coordinator.heartbeat.check_job_failure"):
+            mock_db.select.side_effect = mock_select
+            mock_db.update.return_value = []
+
+            # Barrier is met after removing the worker (other workers
+            # already submitted their gradients for round 2)
+            mock_barrier.check_barrier.return_value = True
+
+            monitor = self._make_monitor()
+            monitor._check_stale_nodes()
+
+            # Verify task was failed
+            task_update_calls = [
+                c for c in mock_db.update.call_args_list
+                if c[0][0] == "tasks"
+            ]
+            assert len(task_update_calls) == 1
+            assert task_update_calls[0][0][1]["status"] == TaskStatus.FAILED.value
+
+            # Verify barrier.remove_worker was called
+            mock_barrier.remove_worker.assert_called_once_with("job-1", "task-1")
+
+            # Verify barrier.check_barrier was called for current_round
+            mock_barrier.check_barrier.assert_called_once_with("job-1", 2)
+
+            # Verify aggregation was triggered since barrier is met
+            mock_agg.assert_called_once_with("job-1", 2)
+
+    def test_offline_node_barrier_not_met_no_aggregation(self):
+        """When a node goes offline and the barrier is NOT met after
+        removing the worker, aggregation should NOT be triggered.
+        Requirements: 14.1, 14.2
+        """
+        stale_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        stale_node = {
+            "id": "node-1",
+            "node_id": "worker-1",
+            "status": NodeStatus.BUSY.value,
+            "last_heartbeat": stale_time,
+        }
+        running_task = {
+            "id": "task-1",
+            "job_id": "job-1",
+            "node_id": "node-1",
+            "status": TaskStatus.RUNNING.value,
+        }
+        running_job = {
+            "id": "job-1",
+            "status": JobStatus.RUNNING.value,
+            "current_round": 1,
+        }
+
+        def mock_select(table, **kwargs):
+            filters = kwargs.get("filters")
+            if table == "nodes":
+                return [stale_node]
+            if table == "tasks":
+                if filters and filters.get("node_id") == "node-1":
+                    return [running_task]
+            if table == "jobs":
+                return [running_job]
+            return []
+
+        with patch("coordinator.heartbeat.db") as mock_db, \
+             patch("coordinator.heartbeat.barrier_mod") as mock_barrier, \
+             patch("coordinator.heartbeat.aggregate_round") as mock_agg, \
+             patch("coordinator.heartbeat.check_job_failure"):
+            mock_db.select.side_effect = mock_select
+            mock_db.update.return_value = []
+
+            # Barrier is NOT met after removing the worker
+            mock_barrier.check_barrier.return_value = False
+
+            monitor = self._make_monitor()
+            monitor._check_stale_nodes()
+
+            # Verify task was failed
+            task_update_calls = [
+                c for c in mock_db.update.call_args_list
+                if c[0][0] == "tasks"
+            ]
+            assert len(task_update_calls) == 1
+            assert task_update_calls[0][0][1]["status"] == TaskStatus.FAILED.value
+
+            # Verify barrier.remove_worker was called
+            mock_barrier.remove_worker.assert_called_once_with("job-1", "task-1")
+
+            # Verify barrier.check_barrier was called
+            mock_barrier.check_barrier.assert_called_once_with("job-1", 1)
+
+            # Aggregation should NOT be triggered since barrier is not met
+            mock_agg.assert_not_called()

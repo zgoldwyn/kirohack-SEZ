@@ -36,6 +36,11 @@ class JobConfig(BaseModel):
     hyperparameters: HyperParameters
     shard_count: int = Field(gt=0)
 
+    @property
+    def total_rounds(self) -> int:
+        """Total training rounds, derived from ``hyperparameters.epochs``."""
+        return self.hyperparameters.epochs
+
 
 class TaskConfig(BaseModel):
     """Configuration payload sent to a Worker for a single task."""
@@ -47,6 +52,7 @@ class TaskConfig(BaseModel):
     hyperparameters: HyperParameters
     shard_index: int
     shard_count: int
+    total_rounds: int
 
 
 # ---------------------------------------------------------------------------
@@ -79,21 +85,13 @@ class JobSubmissionRequest(BaseModel):
     shard_count: int = Field(gt=0)
 
 
-class MetricsReportRequest(BaseModel):
-    """Per-epoch metrics reported by a Worker during training."""
+class GradientSubmissionRequest(BaseModel):
+    """Metadata sent alongside the binary gradient payload."""
 
+    round_number: int = Field(ge=0)
     task_id: str
-    epoch: int = Field(ge=0)
-    loss: float | None = None
-    accuracy: float | None = None
-
-
-class TaskCompleteRequest(BaseModel):
-    """Sent by a Worker when a task finishes successfully."""
-
-    checkpoint_path: str
-    final_loss: float | None = None
-    final_accuracy: float | None = None
+    local_loss: float | None = None
+    local_accuracy: float | None = None
 
 
 class TaskFailRequest(BaseModel):
@@ -130,6 +128,26 @@ class TaskPollResponse(BaseModel):
     hyperparameters: dict | None = None
     shard_index: int | None = None
     shard_count: int | None = None
+    total_rounds: int | None = None
+
+
+class ParameterDownloadResponse(BaseModel):
+    """Metadata returned alongside binary parameter payload."""
+
+    job_id: str
+    current_round: int
+    job_status: str
+
+
+class RoundStatus(BaseModel):
+    """Status of a training round for dashboard display."""
+
+    round_number: int
+    status: str
+    active_worker_count: int
+    submitted_count: int
+    global_loss: float | None = None
+    global_accuracy: float | None = None
 
 
 class AggregatedMetrics(BaseModel):

@@ -1,16 +1,21 @@
 """Dashboard-facing read endpoints (unauthenticated, local/demo only).
 
 These endpoints are intended for local development and demo use only.
-They expose node status, job progress, aggregated metrics, and artifact
-metadata without requiring authentication.
+They expose node status, job progress, training round convergence data,
+per-worker contribution status, and artifact metadata without requiring
+authentication.
 
 Endpoints:
     GET /api/nodes                  — List all nodes
-    GET /api/jobs                   — List all jobs
-    GET /api/jobs/{id}              — Job detail with tasks and metrics
-    GET /api/jobs/{id}/results      — Aggregated metrics + checkpoint paths
+    GET /api/jobs                   — List all jobs (with round progress)
+    GET /api/jobs/{id}              — Job detail with tasks, round progress,
+                                      per-worker contribution status, and
+                                      per-round global metrics
+    GET /api/jobs/{id}/results      — Per-round metrics history + final
+                                      Global_Model checkpoint path
     GET /api/jobs/{id}/artifacts    — Artifacts for a job
-    GET /api/monitoring/summary     — System-wide counts
+    GET /api/monitoring/summary     — System-wide counts with per-job round
+                                      progress for running jobs
 """
 
 from __future__ import annotations
@@ -120,7 +125,8 @@ async def get_node(node_id: str) -> dict[str, Any]:
 
 @router.get("/api/jobs", summary="List all training jobs")
 async def list_jobs() -> list[dict[str, Any]]:
-    """Return all jobs with status, model type, dataset, shard count, and timestamps.
+    """Return all jobs with status, model type, dataset, shard count,
+    round progress, and timestamps.
 
     Requirements: 10.1
     """
@@ -129,7 +135,8 @@ async def list_jobs() -> list[dict[str, Any]]:
             "jobs",
             columns=(
                 "id, job_name, dataset_name, model_type, hyperparameters, "
-                "shard_count, status, aggregated_metrics, error_summary, "
+                "shard_count, status, current_round, total_rounds, "
+                "aggregated_metrics, error_summary, "
                 "created_at, started_at, completed_at"
             ),
         )
@@ -146,9 +153,10 @@ async def list_jobs() -> list[dict[str, Any]]:
 
 @router.get("/api/jobs/{job_id}", summary="Get job detail with tasks and metrics")
 async def get_job(job_id: str) -> dict[str, Any]:
-    """Return job detail including per-task status and aggregated metrics.
+    """Return job detail including training round progress, per-worker
+    contribution status, per-round global metrics, and task information.
 
-    Requirements: 6.3, 10.2, 10.3, 10.4
+    Requirements: 6.3, 10.1, 10.2, 10.3, 10.4
     """
     # Fetch the job record
     try:
@@ -158,13 +166,13 @@ async def get_job(job_id: str) -> dict[str, Any]:
     except DatabaseError as exc:
         raise _db_error_to_http(exc) from exc
 
-    # Fetch tasks for this job, including the latest metrics per task
+    # Fetch tasks for this job
     try:
         tasks = select(
             "tasks",
             columns=(
                 "id, job_id, node_id, shard_index, status, task_config, "
-                "checkpoint_path, error_message, assigned_at, started_at, "
+                "last_submitted_round, error_message, assigned_at, started_at, "
                 "completed_at, created_at"
             ),
             filters={"job_id": job_id},
@@ -172,26 +180,24 @@ async def get_job(job_id: str) -> dict[str, Any]:
     except DatabaseError as exc:
         raise _db_error_to_http(exc) from exc
 
-    # For each task, attach the latest epoch metrics (most recent epoch row)
-    task_ids = [t["id"] for t in tasks]
+    # For each task, attach the latest round metrics (most recent round row)
     latest_metrics_by_task: dict[str, dict[str, Any]] = {}
+    try:
+        all_worker_metrics = select(
+            "metrics",
+            columns="task_id, round_number, loss, accuracy",
+            filters={"job_id": job_id, "metric_type": "worker_local"},
+        )
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
 
-    if task_ids:
-        try:
-            # Fetch all metrics for this job, then pick the latest per task
-            all_metrics = select(
-                "metrics",
-                columns="task_id, epoch, loss, accuracy",
-                filters={"job_id": job_id},
-            )
-        except DatabaseError as exc:
-            raise _db_error_to_http(exc) from exc
-
-        for row in all_metrics:
-            tid = row["task_id"]
-            existing = latest_metrics_by_task.get(tid)
-            if existing is None or row["epoch"] > existing["epoch"]:
-                latest_metrics_by_task[tid] = row
+    for row in all_worker_metrics:
+        tid = row.get("task_id")
+        if tid is None:
+            continue
+        existing = latest_metrics_by_task.get(tid)
+        if existing is None or row["round_number"] > existing["round_number"]:
+            latest_metrics_by_task[tid] = row
 
     # Enrich task records with latest metrics
     enriched_tasks = []
@@ -200,13 +206,93 @@ async def get_job(job_id: str) -> dict[str, Any]:
         enriched_tasks.append(
             {
                 **task,
-                "latest_epoch": latest["epoch"] if latest else None,
+                "latest_round": latest["round_number"] if latest else None,
                 "latest_loss": latest["loss"] if latest else None,
                 "latest_accuracy": latest["accuracy"] if latest else None,
             }
         )
 
-    return {**job, "tasks": enriched_tasks}
+    # -----------------------------------------------------------------------
+    # Per-worker contribution status from gradient_submissions
+    # -----------------------------------------------------------------------
+    current_round = job.get("current_round") or 0
+    worker_contributions: list[dict[str, Any]] = []
+
+    try:
+        gradient_subs = select(
+            "gradient_submissions",
+            columns="task_id, node_id, round_number, local_loss, local_accuracy, created_at",
+            filters={"job_id": job_id},
+        )
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    # Build a lookup: task_id → latest gradient submission
+    latest_sub_by_task: dict[str, dict[str, Any]] = {}
+    for sub in gradient_subs:
+        tid = sub.get("task_id")
+        if tid is None:
+            continue
+        existing = latest_sub_by_task.get(tid)
+        if existing is None or sub["round_number"] > existing["round_number"]:
+            latest_sub_by_task[tid] = sub
+
+    for task in tasks:
+        task_id = task["id"]
+        node_id = task.get("node_id")
+        task_status = task.get("status", "")
+        last_sub = latest_sub_by_task.get(task_id)
+        last_submitted_round = last_sub["round_number"] if last_sub else None
+
+        # Derive worker contribution status:
+        # - "failed" if task is failed
+        # - "submitted" if worker has submitted for the current round
+        # - "computing" if task is running but hasn't submitted for current round
+        # - "waiting" if task is assigned but not yet running
+        # - "completed" if task is completed
+        if task_status == "failed":
+            contribution_status = "failed"
+        elif task_status == "completed":
+            contribution_status = "completed"
+        elif last_submitted_round is not None and last_submitted_round >= current_round:
+            contribution_status = "submitted"
+        elif task_status == "running":
+            contribution_status = "computing"
+        else:
+            contribution_status = "waiting"
+
+        worker_contributions.append({
+            "task_id": task_id,
+            "node_id": node_id,
+            "shard_index": task.get("shard_index"),
+            "status": contribution_status,
+            "last_submitted_round": last_submitted_round,
+        })
+
+    # -----------------------------------------------------------------------
+    # Per-round global metrics from training_rounds for convergence chart
+    # -----------------------------------------------------------------------
+    try:
+        training_rounds = select(
+            "training_rounds",
+            columns=(
+                "round_number, status, active_worker_count, submitted_count, "
+                "global_loss, global_accuracy, started_at, completed_at"
+            ),
+            filters={"job_id": job_id},
+        )
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    # Sort by round_number for consistent ordering
+    training_rounds.sort(key=lambda r: r.get("round_number", 0))
+
+    return {
+        **job,
+        "tasks": enriched_tasks,
+        "worker_contributions": worker_contributions,
+        "training_rounds": training_rounds,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -214,16 +300,17 @@ async def get_job(job_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/jobs/{job_id}/results", summary="Get aggregated metrics and checkpoint paths")
+@router.get("/api/jobs/{job_id}/results", summary="Get per-round metrics and final checkpoint")
 async def get_job_results(job_id: str) -> dict[str, Any]:
-    """Return aggregated metrics and per-task checkpoint paths for a completed job.
+    """Return per-round metrics history and the final Global_Model checkpoint
+    path for a completed job.
 
     Requirements: 6.3, 7.3
     """
     try:
         job = select_one(
             "jobs",
-            columns="id, status, aggregated_metrics, error_summary",
+            columns="id, status, current_round, total_rounds, global_model_path, aggregated_metrics, error_summary",
             filters={"id": job_id},
         )
     except RecordNotFoundError:
@@ -231,22 +318,51 @@ async def get_job_results(job_id: str) -> dict[str, Any]:
     except DatabaseError as exc:
         raise _db_error_to_http(exc) from exc
 
-    # Fetch per-task checkpoint paths
+    # Fetch per-round global metrics from training_rounds
     try:
-        tasks = select(
-            "tasks",
-            columns="id, shard_index, node_id, status, checkpoint_path, error_message",
+        training_rounds = select(
+            "training_rounds",
+            columns=(
+                "round_number, status, active_worker_count, submitted_count, "
+                "global_loss, global_accuracy, started_at, completed_at"
+            ),
             filters={"job_id": job_id},
         )
     except DatabaseError as exc:
         raise _db_error_to_http(exc) from exc
 
+    training_rounds.sort(key=lambda r: r.get("round_number", 0))
+
+    # Fetch the final Global_Model checkpoint artifact (task_id is NULL for
+    # global checkpoints)
+    try:
+        artifacts = select(
+            "artifacts",
+            columns="id, artifact_type, storage_path, round_number, size_bytes, created_at",
+            filters={"job_id": job_id, "artifact_type": "checkpoint"},
+        )
+    except DatabaseError as exc:
+        raise _db_error_to_http(exc) from exc
+
+    # Find the global checkpoint (task_id is NULL) — pick the one with the
+    # highest round_number as the final checkpoint.
+    global_checkpoints = [a for a in artifacts if a.get("task_id") is None]
+    global_checkpoints.sort(
+        key=lambda a: a.get("round_number") if a.get("round_number") is not None else -1,
+        reverse=True,
+    )
+    final_checkpoint = global_checkpoints[0] if global_checkpoints else None
+
     return {
         "job_id": job["id"],
         "status": job["status"],
+        "current_round": job.get("current_round"),
+        "total_rounds": job.get("total_rounds"),
+        "global_model_path": job.get("global_model_path"),
         "aggregated_metrics": job.get("aggregated_metrics"),
         "error_summary": job.get("error_summary"),
-        "tasks": tasks,
+        "training_rounds": training_rounds,
+        "final_checkpoint": final_checkpoint,
     }
 
 
@@ -275,7 +391,7 @@ async def list_job_artifacts(job_id: str) -> list[dict[str, Any]]:
             "artifacts",
             columns=(
                 "id, job_id, task_id, node_id, artifact_type, "
-                "storage_path, epoch, size_bytes, created_at"
+                "storage_path, round_number, size_bytes, created_at"
             ),
             filters={"job_id": job_id},
         )
@@ -292,32 +408,40 @@ async def list_job_artifacts(job_id: str) -> list[dict[str, Any]]:
 
 @router.get("/api/monitoring/summary", summary="System-wide monitoring summary")
 async def monitoring_summary() -> dict[str, Any]:
-    """Return counts of nodes and jobs broken down by status.
+    """Return counts of nodes and jobs broken down by status, plus
+    current_round for each running job.
 
     Requirements: 11.2
     """
     try:
         nodes = select("nodes", columns="status")
-        jobs = select("jobs", columns="status")
+        jobs = select("jobs", columns="id, status, current_round, total_rounds")
     except DatabaseError as exc:
         raise _db_error_to_http(exc) from exc
 
     # Count nodes by status
     node_counts: dict[str, int] = {"idle": 0, "busy": 0, "offline": 0}
     for node in nodes:
-        status = node.get("status", "")
-        if status in node_counts:
-            node_counts[status] += 1
+        s = node.get("status", "")
+        if s in node_counts:
+            node_counts[s] += 1
 
     # Derive "online" as idle + busy
     online_nodes = node_counts["idle"] + node_counts["busy"]
 
-    # Count jobs by status
+    # Count jobs by status and collect running job round progress
     job_counts: dict[str, int] = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
+    running_jobs: list[dict[str, Any]] = []
     for job in jobs:
-        status = job.get("status", "")
-        if status in job_counts:
-            job_counts[status] += 1
+        s = job.get("status", "")
+        if s in job_counts:
+            job_counts[s] += 1
+        if s == "running":
+            running_jobs.append({
+                "job_id": job["id"],
+                "current_round": job.get("current_round"),
+                "total_rounds": job.get("total_rounds"),
+            })
 
     return {
         "nodes": {
@@ -334,6 +458,7 @@ async def monitoring_summary() -> dict[str, Any]:
             "failed": job_counts["failed"],
             "total": len(jobs),
         },
+        "running_jobs": running_jobs,
     }
 
 

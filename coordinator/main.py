@@ -7,27 +7,28 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from coordinator import db
-from coordinator.aggregator import aggregate_job_metrics, check_job_failure
+from coordinator.aggregator import aggregate_round, check_job_failure, complete_job
 from coordinator.auth import generate_token, get_current_node, hash_token
-from coordinator.constants import ArtifactType, JobStatus, NodeStatus, TaskStatus
+from coordinator.barrier import check_barrier, create_round, get_active_workers, record_submission
+from coordinator.constants import JobStatus, NodeStatus, TaskStatus
 from coordinator.config_parser import ConfigValidationError, parse_job_config
 from coordinator.models import (
+    GradientSubmissionRequest,
     JobSubmissionRequest,
     JobSubmissionResponse,
-    MetricsReportRequest,
     NodeRegistrationRequest,
     NodeRegistrationResponse,
-    TaskCompleteRequest,
+    ParameterDownloadResponse,
     TaskFailRequest,
 )
 from coordinator.heartbeat import heartbeat_monitor
 from coordinator.models import TaskPollResponse
+from coordinator.param_server import ParamServerError, get_parameters, initialize_model
 from coordinator.scheduler import create_tasks_for_job, poll_task
-from coordinator.storage import generate_signed_upload_url
+from coordinator.storage import GRADIENTS_BUCKET, upload_blob
 
 from coordinator.dashboard import router as dashboard_router
 
@@ -218,6 +219,26 @@ async def submit_job(body: JobSubmissionRequest):
             detail=exc.errors,
         ) from exc
 
+    # Count idle nodes and reject if insufficient
+    idle_nodes = db.select(
+        "nodes",
+        columns="id",
+        filters={"status": NodeStatus.IDLE.value},
+    )
+    idle_count = len(idle_nodes)
+
+    if body.shard_count > idle_count:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"shard_count ({body.shard_count}) exceeds the number of "
+                f"idle nodes ({idle_count})"
+            ),
+        )
+
+    # Derive total_rounds from hyperparameters (epochs)
+    total_rounds = job_config.total_rounds
+
     # Create job record
     job_data = {
         "job_name": body.job_name,
@@ -226,6 +247,8 @@ async def submit_job(body: JobSubmissionRequest):
         "hyperparameters": job_config.hyperparameters.model_dump(),
         "shard_count": body.shard_count,
         "status": JobStatus.QUEUED.value,
+        "current_round": 0,
+        "total_rounds": total_rounds,
     }
 
     try:
@@ -249,12 +272,52 @@ async def submit_job(body: JobSubmissionRequest):
             detail="Database unavailable",
         ) from exc
 
+    # Initialize Global_Model and store initial parameters
+    try:
+        global_model_path = initialize_model(job_id, job_config)
+    except ParamServerError as exc:
+        logger.error("Failed to initialize global model for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to initialize global model",
+        ) from exc
+
+    # Update job record with global_model_path
+    try:
+        db.update(
+            "jobs",
+            {"global_model_path": global_model_path},
+            filters={"id": job_id},
+        )
+    except db.DatabaseError as exc:
+        logger.error("Failed to update job %s with global_model_path: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+    # Create initial training_rounds record for round 0
+    try:
+        create_round(
+            job_id=job_id,
+            round_number=0,
+            active_worker_count=body.shard_count,
+        )
+    except db.DatabaseError as exc:
+        logger.error("Failed to create initial training round for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
     logger.info(
-        "event=job_submitted | job_id=%s | dataset=%s | model_type=%s | shard_count=%d",
+        "event=job_submitted | job_id=%s | dataset=%s | model_type=%s | shard_count=%d | total_rounds=%d | global_model_path=%s",
         job_id,
         body.dataset_name,
         body.model_type,
         body.shard_count,
+        total_rounds,
+        global_model_path,
     )
 
     return JobSubmissionResponse(job_id=job_id)
@@ -315,12 +378,14 @@ async def start_task(
     task_id: str,
     node: dict = Depends(get_current_node),
 ):
-    """Mark a task as running.
+    """Mark a task as running and ensure round 0 tracking exists.
 
     - Verify task exists (404)
     - Verify task is assigned to requesting node (403)
     - Verify task status is "assigned" (409)
     - Update status → "running", set started_at
+    - Idempotently ensure a training_rounds record exists for round 0
+    Requirements: 5.1
     """
     task = _get_task_or_404(task_id)
     _verify_task_ownership(task, node)
@@ -331,99 +396,42 @@ async def start_task(
             detail=f"Task status is '{task.get('status')}', expected 'assigned'",
         )
 
+    job_id = task["job_id"]
     now = datetime.now(timezone.utc).isoformat()
+
     db.update(
         "tasks",
         {"status": TaskStatus.RUNNING.value, "started_at": now},
         filters={"id": task_id},
     )
 
+    # Idempotently ensure a training_rounds record exists for round 0.
+    # The record is normally created during job submission, but we guard
+    # against the case where it was not (e.g. older jobs, race conditions).
+    existing_rounds = db.select(
+        "training_rounds",
+        filters={"job_id": job_id, "round_number": 0},
+    )
+    if not existing_rounds:
+        active_count = len(get_active_workers(job_id))
+        create_round(
+            job_id=job_id,
+            round_number=0,
+            active_worker_count=active_count,
+        )
+        logger.info(
+            "event=round_0_created_on_start | task_id=%s | job_id=%s | active_worker_count=%d",
+            task_id,
+            job_id,
+            active_count,
+        )
+
     logger.info(
         "event=task_started | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s",
         task_id,
-        task.get("job_id"),
-        node.get("node_id"),
-        node["id"],
-    )
-
-    return {"status": "ok"}
-
-
-# ---------------------------------------------------------------------------
-# 12.2  POST /api/tasks/{id}/complete
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/tasks/{task_id}/complete")
-async def complete_task(
-    task_id: str,
-    body: TaskCompleteRequest,
-    node: dict = Depends(get_current_node),
-):
-    """Mark a task as completed.
-
-    - Verify task exists (404) and belongs to requesting node (403)
-    - Update task: status → "completed", checkpoint_path, completed_at
-    - Insert artifact record
-    - Set node status → "idle"
-    - Check if all tasks in job completed → aggregate
-    - Check if job should be marked failed
-    """
-    task = _get_task_or_404(task_id)
-    _verify_task_ownership(task, node)
-
-    job_id = task["job_id"]
-    node_id = node["id"]
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Update task
-    db.update(
-        "tasks",
-        {
-            "status": TaskStatus.COMPLETED.value,
-            "checkpoint_path": body.checkpoint_path,
-            "completed_at": now,
-        },
-        filters={"id": task_id},
-    )
-
-    # Insert artifact record
-    db.insert(
-        "artifacts",
-        {
-            "job_id": job_id,
-            "task_id": task_id,
-            "node_id": node_id,
-            "artifact_type": ArtifactType.CHECKPOINT.value,
-            "storage_path": body.checkpoint_path,
-        },
-    )
-
-    # Set node back to idle
-    db.update(
-        "nodes",
-        {"status": NodeStatus.IDLE.value},
-        filters={"id": node_id},
-    )
-
-    # Check if ALL tasks in the job are now completed → aggregate
-    all_tasks = db.select("tasks", filters={"job_id": job_id})
-    all_completed = all(
-        t.get("status") == TaskStatus.COMPLETED.value for t in all_tasks
-    )
-    if all_completed:
-        aggregate_job_metrics(job_id)
-    else:
-        # Some tasks may have failed; check if job should be marked failed
-        check_job_failure(job_id)
-
-    logger.info(
-        "event=task_completed | task_id=%s | job_id=%s | node_id=%s | node_db_id=%s | checkpoint_path=%s",
-        task_id,
         job_id,
         node.get("node_id"),
-        node_id,
-        body.checkpoint_path,
+        node["id"],
     )
 
     return {"status": "ok"}
@@ -488,71 +496,324 @@ async def fail_task(
 
 
 # ---------------------------------------------------------------------------
-# 12.4  POST /api/tasks/{id}/upload-url
+# 37.1  GET /api/jobs/{id}/parameters — Binary parameter download
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/tasks/{task_id}/upload-url")
-async def request_upload_url(
-    task_id: str,
+def _get_active_task_for_node_in_job(job_id: str, node_id: str) -> dict:
+    """Return the active task for *node_id* in *job_id*, or raise 403.
+
+    A task is considered active if its status is ``assigned`` or
+    ``running``.
+    """
+    tasks = db.select("tasks", filters={"job_id": job_id, "node_id": node_id})
+    active_statuses = {TaskStatus.ASSIGNED.value, TaskStatus.RUNNING.value}
+    for task in tasks:
+        if task.get("status") in active_statuses:
+            return task
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="No active task for this node in the requested job",
+    )
+
+
+@app.get("/api/jobs/{job_id}/parameters")
+async def download_parameters(
+    job_id: str,
     node: dict = Depends(get_current_node),
 ):
-    """Generate a signed upload URL for the task's checkpoint.
+    """Download the current Global_Model parameters for a job.
 
-    - Verify task exists (404) and belongs to requesting node (403)
-    - Generate signed URL for path {job_id}/{task_id}/final.pt
-    - Return {"signed_url": "<url>"}
+    - Authenticate request using auth dependency
+    - Verify the requesting node has an active task for this job
+    - Fetch current Global_Model parameters via param_server
+    - Return binary payload with Content-Type: application/octet-stream
+    - Include ParameterDownloadResponse metadata in custom response headers
+    - If job status is "completed" or "failed", return status so Worker
+      can exit training loop
+    Requirements: 4.4, 5.4, 13.1
     """
-    task = _get_task_or_404(task_id)
-    _verify_task_ownership(task, node)
+    # Verify node has an active task for this job
+    _get_active_task_for_node_in_job(job_id, node["id"])
 
-    job_id = task["job_id"]
-
-    try:
-        result = generate_signed_upload_url(job_id, task_id)
-    except Exception as exc:
-        logger.error("Failed to generate signed upload URL: %s", exc)
+    # Fetch job record for metadata
+    job_rows = db.select("jobs", filters={"id": job_id})
+    if not job_rows:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate signed upload URL",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    job = job_rows[0]
+
+    job_status = job.get("status", "")
+    current_round = job.get("current_round", 0) or 0
+
+    # Build metadata
+    meta = ParameterDownloadResponse(
+        job_id=job_id,
+        current_round=current_round,
+        job_status=job_status,
+    )
+
+    # If job is completed or failed, return metadata-only response so
+    # the Worker knows to stop the training loop.
+    if job_status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
+        return Response(
+            content=b"",
+            media_type="application/octet-stream",
+            headers={
+                "X-Job-Id": meta.job_id,
+                "X-Current-Round": str(meta.current_round),
+                "X-Job-Status": meta.job_status,
+            },
+        )
+
+    # Download parameters
+    try:
+        param_bytes = get_parameters(job_id)
+    except ParamServerError as exc:
+        logger.error(
+            "Failed to download parameters for job %s: %s", job_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to retrieve model parameters",
         ) from exc
 
-    # generate_signed_upload_url returns a dict with "signed_url", "token", "path"
-    # Extract just the URL string for the worker
-    if isinstance(result, dict):
-        return {"signed_url": result.get("signed_url", result)}
-    return {"signed_url": result}
+    logger.debug(
+        "event=parameters_downloaded | job_id=%s | node_db_id=%s | round=%d | bytes=%d",
+        job_id,
+        node["id"],
+        current_round,
+        len(param_bytes),
+    )
 
-
-# ---------------------------------------------------------------------------
-# 13.1  POST /api/metrics
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/metrics")
-async def report_metrics(
-    body: MetricsReportRequest,
-    node: dict = Depends(get_current_node),
-):
-    """Report per-epoch training metrics for a task.
-
-    - Authenticate request
-    - Verify the referenced task exists and belongs to the requesting node
-    - Insert a metrics record with job_id, task_id, node_id, epoch, loss, accuracy
-    """
-    task = _get_task_or_404(body.task_id)
-    _verify_task_ownership(task, node)
-
-    db.insert(
-        "metrics",
-        {
-            "job_id": task["job_id"],
-            "task_id": body.task_id,
-            "node_id": node["id"],
-            "epoch": body.epoch,
-            "loss": body.loss,
-            "accuracy": body.accuracy,
+    return Response(
+        content=param_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "X-Job-Id": meta.job_id,
+            "X-Current-Round": str(meta.current_round),
+            "X-Job-Status": meta.job_status,
         },
     )
 
-    return {"status": "ok"}
+
+# ---------------------------------------------------------------------------
+# 37.2  POST /api/jobs/{id}/gradients — Gradient submission
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/jobs/{job_id}/gradients")
+async def submit_gradients(
+    job_id: str,
+    request: Request,
+    node: dict = Depends(get_current_node),
+):
+    """Submit gradient update for the current training round.
+
+    The request body is the raw binary gradient payload (application/octet-stream).
+    Metadata is passed via query parameters: round_number, task_id,
+    local_loss, local_accuracy.
+
+    - Authenticate request using auth dependency
+    - Verify the requesting node has an active task for this job
+    - Validate round_number matches job's current_round (409 if mismatch)
+    - Validate worker hasn't already submitted for this round (409 if dup)
+    - Store gradient binary payload to Supabase Storage
+    - Record submission via barrier.record_submission()
+    - Store per-worker metrics in metrics table
+    - Update task's last_submitted_round
+    - Check barrier — if met, trigger aggregation
+    Requirements: 5.1, 5.2, 5.3, 5.6, 13.2, 13.3
+    """
+    node_id = node["id"]
+
+    # Parse metadata from query parameters
+    params = request.query_params
+    try:
+        round_number = int(params["round_number"])
+        task_id = str(params["task_id"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Missing or invalid required query parameters: round_number, task_id",
+        ) from exc
+
+    local_loss_raw = params.get("local_loss")
+    local_accuracy_raw = params.get("local_accuracy")
+    local_loss = float(local_loss_raw) if local_loss_raw is not None else None
+    local_accuracy = float(local_accuracy_raw) if local_accuracy_raw is not None else None
+
+    # Verify node has an active task for this job
+    active_task = _get_active_task_for_node_in_job(job_id, node_id)
+
+    # Verify the task_id matches the node's active task
+    if active_task["id"] != task_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="task_id does not match the active task for this node",
+        )
+
+    # Fetch job record
+    job_rows = db.select("jobs", filters={"id": job_id})
+    if not job_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    job = job_rows[0]
+
+    # Validate round_number matches job's current_round
+    current_round = job.get("current_round", 0) or 0
+    if round_number != current_round:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Round number mismatch: submitted round_number={round_number}, "
+                f"job current_round={current_round}"
+            ),
+        )
+
+    # Check for duplicate submission
+    existing_submissions = db.select(
+        "gradient_submissions",
+        filters={
+            "job_id": job_id,
+            "task_id": task_id,
+            "round_number": round_number,
+        },
+    )
+    if existing_submissions:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Worker already submitted gradients for round {round_number}",
+        )
+
+    # Read binary gradient payload from request body
+    gradient_data = await request.body()
+    if not gradient_data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Empty gradient payload",
+        )
+
+    # Store gradient to Supabase Storage
+    gradient_path = f"{job_id}/round_{round_number}/node_{node_id}.pt"
+    try:
+        upload_blob(GRADIENTS_BUCKET, gradient_path, gradient_data)
+    except Exception as exc:
+        logger.error(
+            "Failed to upload gradient for job %s round %d node %s: %s",
+            job_id,
+            round_number,
+            node_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to store gradient payload",
+        ) from exc
+
+    # Record submission via barrier (inserts gradient_submissions row and
+    # increments submitted_count on training_rounds)
+    try:
+        submission = record_submission(
+            job_id=job_id,
+            round_number=round_number,
+            task_id=task_id,
+            node_id=node_id,
+        )
+        # Update the gradient_path on the submission record
+        db.update(
+            "gradient_submissions",
+            {
+                "gradient_path": gradient_path,
+                "local_loss": local_loss,
+                "local_accuracy": local_accuracy,
+            },
+            filters={"id": submission["id"]},
+        )
+    except db.DatabaseError as exc:
+        logger.error(
+            "Failed to record gradient submission for job %s round %d: %s",
+            job_id,
+            round_number,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to record gradient submission",
+        ) from exc
+
+    # Store per-worker metrics
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        db.insert(
+            "metrics",
+            {
+                "job_id": job_id,
+                "task_id": task_id,
+                "node_id": node_id,
+                "round_number": round_number,
+                "metric_type": "worker_local",
+                "loss": local_loss,
+                "accuracy": local_accuracy,
+                "created_at": now,
+            },
+        )
+    except db.DatabaseError:
+        logger.exception(
+            "event=worker_metric_insert_failed | job_id=%s | round=%d | task_id=%s",
+            job_id,
+            round_number,
+            task_id,
+        )
+
+    # Update task's last_submitted_round
+    try:
+        db.update(
+            "tasks",
+            {"last_submitted_round": round_number},
+            filters={"id": task_id},
+        )
+    except db.DatabaseError:
+        logger.exception(
+            "event=task_round_update_failed | job_id=%s | task_id=%s | round=%d",
+            job_id,
+            task_id,
+            round_number,
+        )
+
+    # Check if barrier is met — if so, trigger aggregation
+    barrier_met = check_barrier(job_id, round_number)
+
+    if barrier_met:
+        logger.info(
+            "event=barrier_met | job_id=%s | round=%d — triggering aggregation",
+            job_id,
+            round_number,
+        )
+        try:
+            aggregate_round(job_id, round_number)
+        except Exception:
+            logger.exception(
+                "event=aggregation_failed | job_id=%s | round=%d",
+                job_id,
+                round_number,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Gradient aggregation failed",
+            )
+
+    logger.info(
+        "event=gradient_submitted | job_id=%s | round=%d | task_id=%s | node_db_id=%s | barrier_met=%s",
+        job_id,
+        round_number,
+        task_id,
+        node_id,
+        barrier_met,
+    )
+
+    return {"status": "ok", "barrier_met": barrier_met}
