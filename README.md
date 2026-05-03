@@ -101,32 +101,19 @@ cd kirohack-SEZ
 
 ### 2. Set up Python environment
 
-**macOS / Linux:**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r worker/requirements.txt
 ```
 
-**Windows (PowerShell):**
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r worker/requirements.txt
-```
-
 ### 3. Start the worker
 
-**macOS / Linux:**
 ```bash
 COORDINATOR_URL=https://kirohack-sez-production.up.railway.app python -m worker.main
 ```
 
-**Windows (PowerShell):**
-```powershell
-$env:COORDINATOR_URL="https://kirohack-sez-production.up.railway.app"
-python -m worker.main
-```
+> **Windows users:** Use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) (Windows Subsystem for Linux) and follow the Linux instructions above.
 
 That's it. The worker will:
 

@@ -53,6 +53,25 @@ export async function postJSON<TBody, TResponse>(
   return data as TResponse;
 }
 
+/**
+ * DELETE helper for removing resources.
+ */
+export async function deleteRequest(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const err = new Error(
+      data?.detail
+        ? typeof data.detail === "string"
+          ? data.detail
+          : JSON.stringify(data.detail)
+        : data?.error || `HTTP ${res.status}`
+    );
+    (err as Error & { status: number }).status = res.status;
+    throw err;
+  }
+}
+
 /** Format a timestamp string for display */
 export function formatDate(ts: string | null | undefined): string {
   if (!ts) return "—";
