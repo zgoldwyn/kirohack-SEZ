@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "name": "Run Tests After Task",
+  "description": "Automatically runs pytest after a spec task is marked as completed to verify nothing is broken",
+  "version": "1",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": ".venv/bin/pytest tests/ -x --tb=short",
+    "timeout": 120
+  }
+}
